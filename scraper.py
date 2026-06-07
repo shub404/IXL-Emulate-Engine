@@ -541,22 +541,20 @@ def extract_correct_answer(page):
 
     return answer
 
-
-# ─────────────────────────────────────────────────────────────────────────────
 #  DIAGRAM EXTRACTION
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _safe_bbox(element):
     try:
+        # Returns physical screen coordinated and dimensions of web element
         return element.bounding_box()
     except Exception:
         return None
 
 
-def _is_junk_label(label: str) -> bool:
-    return (label or "").strip().lower() in JUNK_LABELS
+# def _is_junk_label(label: str) -> bool:
+#     return (label or "").strip().lower() in JUNK_LABELS
 
-
+# Used to ignore microscopic elements that hinder the scraper.
 def _is_too_small(bb) -> bool:
     if bb is None:
         return True
@@ -567,7 +565,7 @@ def _is_too_small(bb) -> bool:
         return True
     return False
 
-
+# Logic to eliminate duplicate images
 def _boxes_overlap(a, b, threshold=0.70):
     if a is None or b is None:
         return False
@@ -575,10 +573,10 @@ def _boxes_overlap(a, b, threshold=0.70):
     ax2, ay2 = ax1 + a["width"],  ay1 + a["height"]
     bx1, by1 = b["x"], b["y"]
     bx2, by2 = bx1 + b["width"],  by1 + b["height"]
-    inter_x    = max(0, min(ax2, bx2) - max(ax1, bx1))
-    inter_y    = max(0, min(ay2, by2) - max(ay1, by1))
+    inter_x = max(0, min(ax2, bx2) - max(ax1, bx1))
+    inter_y = max(0, min(ay2, by2) - max(ay1, by1))
     inter_area = inter_x * inter_y
-    b_area     = b["width"] * b["height"]
+    b_area = b["width"] * b["height"]
     if b_area <= 0:
         return False
     return (inter_area / b_area) >= threshold
@@ -601,7 +599,7 @@ def _screenshot_element(element, path):
         print(f"     [!] screenshot failed ({path}): {e}")
         return False
 
-
+# Count number of diagrams
 def _collect_units_from_container(container, scope_label):
     for sel in (
         ".guide-counting-clickable-image-container",
@@ -615,24 +613,23 @@ def _collect_units_from_container(container, scope_label):
             return units
     return [container]
 
-
+#    Gate: checks ONLY inside .secHdr and .secContent.
+#   Each scope part queried independently — no comma-joining with signals.
 def _question_has_diagram(page):
-    """
-    Gate: checks ONLY inside .secHdr and .secContent.
-    Each scope part queried independently — no comma-joining with signals.
-    """
+
     for scope_part in Q_SCOPE_PARTS:
         for signal in DIAGRAM_SIGNALS:
             try:
+                # Greater than 0 means, diagram found!
                 if page.locator(f"{scope_part} {signal}").count() > 0:
                     return True
             except Exception:
                 pass
     return False
 
-
+#Gate: checks signals directly on a single option tile locator
 def _tile_has_diagram(tile):
-    """Gate: checks signals directly on a single option tile locator."""
+
     for signal in DIAGRAM_SIGNALS:
         try:
             if tile.locator(signal).count() > 0:
@@ -756,6 +753,8 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
                   f"bb=({round(bb['x'])},{round(bb['y'])},{round(bb['width'])},{round(bb['height'])})")
             return
         try:
+            # This relurns an inline JS object matching elements's actual HTML tag names, classes etc
+            # Used to print in console about the image info
             meta = element.evaluate(
                 "el => ({tag: el.tagName, cls: el.getAttribute('class'), "
                 "role: el.getAttribute('role'), al: el.getAttribute('aria-label')})"
@@ -781,6 +780,7 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
         bb = _safe_bbox(el)
         if bb is None:
             return False
+        # Coordinates are not (0,0), even more negative
         if bb["y"] < 0 or bb["x"] < 0:
             return False
         if bb["width"] < 1 or bb["height"] < 1:
@@ -827,8 +827,7 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
     for container_sel in list(L1_INTEGRATED) + list(L1_MULTI) + list(L1_REPEATING):
         containers = get_elements(container_sel)
 
-        # For integrated single-figure diagrams in the QUESTION scope, IXL
-        # pre-renders upcoming-question copies stacked below the live one.
+        # For integrated single-figure diagrams in the QUESTION scope, IXL pre-renders upcoming-question copies stacked below the live one.
         # Keep only the topmost (smallest y) — that's the active diagram.
         # L1_MULTI types are exempt: a question may show several legitimately.
         if container_sel in L1_INTEGRATED and root_locator is None and len(containers) > 1:
@@ -852,12 +851,10 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
 
     return paths
 
-# ─────────────────────────────────────────────────────────────────────────────
-
+# After submission, screenshot each bin (with placed tiles) as the correct answer.
+# Distinguishes the answer-state container from the question-state container by checking which binsContainer has tiles (draggableElement) placed inside its bins.
 def _screenshot_answer_bins(page, question_index, skill_name, ts):
-    """After submission, screenshot each bin (with placed tiles) as the correct answer.
-    Distinguishes the answer-state container from the question-state container by
-    checking which binsContainer has tiles (draggableElement) placed inside its bins."""
+
     slug = skill_name.replace(" ", "_")[:40]
     paths = []
     try:
