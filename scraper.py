@@ -17,7 +17,7 @@ LOGIN_URL = "https://in.ixl.com/signin"
 EMAIL = "parkerhouston411@kacad"
 PASSWORD = "81party"
 QUESTIONS_PER_SKILL = 3
-EXCEL_FILENAME = "ixl_grade3_questions.xlsx"
+EXCEL_FILENAME = "ixl_grade3_questions(1).xlsx"
 IMAGE_DIR = "ixl_diagrams"
 
 # ── Mode 2: set this to the skill URL you want to resume from ─────────────────
@@ -245,9 +245,9 @@ _MATH_WALKER_JS = """
                 if (child.classList && _DIAGRAM_CLASSES.some(c => child.classList.contains(c))) continue;
                 const tag = child.tagName.toLowerCase();
                 if (tag === 'input' && child.classList.contains('fillIn')) {
-                    out += ' __ ';
+                    out += '__';
                 } else if (tag === 'div' && child.classList && child.classList.contains('drop-slot')) {
-                    out += ' ___ ';
+                    out += '___';
                 } else if (tag === 'table' && child.hasAttribute('audioalt')) {
                     // Old-style fraction table on option tiles: <table audioalt="2/3">
                     out += child.getAttribute('audioalt');
@@ -300,9 +300,10 @@ _MATH_WALKER_JS = """
                     }
                     if (operands.length > 0) {
                         const op = operator || '+';
-                        out += operands.join(' ' + op + ' ');
+                        
+                          += operands.join(' ' + op + ' ');
                         if (answerBlanks > 0)
-                            out += ' = ' + Array(answerBlanks).fill('_').join(' ');
+                            out += ' = ' + Array(answerBlanks).fill('__').join(' ');
                     }
                 } else if (child.classList && child.classList.contains('old-vertiArith')) {
                     const rows = [...child.querySelectorAll('table tr')];
@@ -320,7 +321,7 @@ _MATH_WALKER_JS = """
                                 continue;
                             }
                             const fi = cells[i].querySelector('input.fillIn');
-                            if (fi) { numStr += '_'; }
+                            if (fi) { numStr += '__'; }
                             else {
                                 const inner = cells[i].querySelector('div') || cells[i];
                                 const t = inner.textContent.trim();
@@ -342,9 +343,9 @@ _MATH_WALKER_JS = """
     };
 """
 
-
+"""Only activates for fill-in questions; formats fractions as num/den."""
 def _reconstruct_with_blanks(page, root_selector):
-    """Only activates for fill-in questions; formats fractions as num/den."""
+
     js = f"""
     (sel) => {{
         const root = document.querySelector(sel);
@@ -360,9 +361,9 @@ def _reconstruct_with_blanks(page, root_selector):
     except Exception:
         return None
 
-
-def _extract_math_text(page, root_selector):
     """Extract text from selector with fractions as num/den; works for all question types."""
+def _extract_math_text(page, root_selector):
+
     js = f"""
     (sel) => {{
         const root = document.querySelector(sel);
@@ -383,10 +384,10 @@ def extract_question_text(page):
                 ".question-and-submission-view .ixl-practice-crate",
                 ".ixl-practice-crate"):
         rebuilt = _reconstruct_with_blanks(page, sel)
+        # To clean the string and remove additional spaces
         if rebuilt is not None:
             text = " ".join(rebuilt.replace("\n", " ").split())
-            text = text.replace(" __ ", " __").replace("__  ", "__ ")
-            return " ".join(text.split())
+            return text
 
     question_text = ""
     hdr     = page.locator(".secHdr").first
@@ -408,6 +409,8 @@ def extract_question_text(page):
             )
         elif crate.count() > 0 and crate.is_visible():
             crate_text = _extract_math_text(page, ".ixl-practice-crate")
+            # Accept the entire dirty string if no question appears
+            # Clean the text by removing 'Submit' and extra spaces
             question_text = " ".join(
                 (crate_text or crate.inner_text()).split("Submit")[0].replace("\n", " ").split()
             )
@@ -645,6 +648,7 @@ def extract_diagrams_screenshots(page, question_index, skill_name):
     ts = int(time.time())
 
     q_paths = []
+    opt_paths = []
     if _question_has_diagram(page):
         q_paths = _extract_from_scope(
             page=page,
@@ -658,28 +662,42 @@ def extract_diagrams_screenshots(page, question_index, skill_name):
     # _keep_largest intentionally removed: L1_INTEGRATED phantom de-dupe handles single-type
     # diagrams; L1_MULTI diagrams (number lines, pie charts) may have multiple real instances.
 
-    opt_paths = []
-    tiles = page.locator(
-        ".question-and-submission-view .SelectableTile, "
-        ".ixl-practice-crate .SelectableTile"
-    ).all()
+    # Find active question container to avoid duplicate phantom options
+    _q_candidates = []
+    _seen_q_coords = set()
+    for _scope in (".question-and-submission-view", ".ixl-practice-crate"):
+        try:
+            for _el in page.locator(_scope).all():
+                _bb = _safe_bbox(_el)
+                if _bb is None or _bb["width"] < 1 or _bb["height"] < 1 or _bb["y"] < 0:
+                    continue
+                _coord = (round(_bb["x"]), round(_bb["y"]), round(_bb["width"]), round(_bb["height"]))
+                if _coord not in _seen_q_coords:
+                    _seen_q_coords.add(_coord)
+                    _q_candidates.append((_bb["y"], _el))
+        except Exception:
+            pass
 
-    for t_idx, tile in enumerate(tiles):
+    active_tiles = []
+    if _q_candidates:
+        _q_candidates.sort(key=lambda t: t[0])
+        _active_q = _q_candidates[0][1]
+        active_tiles = _active_q.locator(".SelectableTile").all()
+
+    for t_idx, tile in enumerate(active_tiles):
         tile_class = tile.get_attribute("class") or ""
         if "TEXT" in tile_class.split():
             continue
         if not _tile_has_diagram(tile):
             continue
 
-        tile_paths = _extract_from_scope(
-            page=page,
-            scope_parts=None,
-            root_locator=tile,
-            scope_label=f"Opt{t_idx + 1}",
-            prefix=f"{slug}_q{question_index + 1}_opt{t_idx + 1}",
-            ts=ts,
-        )
-        opt_paths.extend(tile_paths)
+        bb = _wait_for_element_painted(tile)
+        if bb and bb["width"] > 2 and bb["height"] > 2:
+            idx = len(opt_paths) + 1
+            path = os.path.join(IMAGE_DIR, f"{slug}_q{question_index + 1}_opt{idx}_{ts}.png")
+            if _screenshot_element(tile, path):
+                opt_paths.append(path)
+                print(f"       [Opt{idx}] SAVED tile screenshot: {path}")
 
     # Sorting drag-and-drop bins: find the live binsContainer (topmost y = active
     # question), then screenshot only its direct .bin children. IXL pre-renders
@@ -983,124 +1001,12 @@ def extract_and_advance(page, category_name, skill_name, serial_tracker):
 
     serial_tracker[0] += 1
 
-
-# def run_scraper():
-#     setup_dir()
-#     init_excel()
-
-#     with sync_playwright() as p:
-#         print("Initializing browser context...")
-#         browser = p.chromium.launch(headless=False)
-#         context = browser.new_context(
-#             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-#                        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-#         )
-#         page = context.new_page()
-
-#         print("Authenticating...")
-#         page.goto(LOGIN_URL)
-#         page.fill("input[type='email'], input[name='username']", EMAIL)
-#         page.fill("input[type='password'], input[name='password']", PASSWORD)
-#         page.keyboard.press("Enter")
-#         page.wait_for_timeout(6000)
-
-#         # ── STEP 1: test single skill directly ────────────────────────────────
-#         TEST_URL = "https://www.ixl.com/math/grade-3/find-equivalent-fractions-using-fraction-strips"
-#         print(f"\n[TEST] Directly testing: {TEST_URL}")
-#         page.goto(TEST_URL)
-#         page.wait_for_selector(
-#             ".ixl-practice-crate, .math.section, .question-component",
-#             state="visible", timeout=15000
-#         )
-#         page.wait_for_timeout(1500)
-
-#         extract_and_advance(
-#             page, "TEST",
-#             "Find equivalent fractions using fraction strips", [1]
-#         )
-#         print("[TEST] Done. Check Excel and ixl_diagrams folder before continuing.")
-#         input("\nPress ENTER to continue to full scrape from 'II. Equivalent fractions'...")
-
-#         # ── STEP 2: full scrape starting from category II ─────────────────────
-#         print(f"\nNavigating to target directory: {TARGET_URL}")
-#         page.goto(TARGET_URL)
-#         page.wait_for_selector("div.skill-tree-category", state="attached", timeout=15000)
-
-#         category_elements = page.locator("div.skill-tree-category").all()
-#         print(f"Found {len(category_elements)} category blocks.")
-
-#         serial_tracker  = [2]
-#         START_CATEGORY  = "equivalent fractions"
-#         reached_start   = False
-
-#         for cat_index in range(len(category_elements)):
-#             cat_block  = page.locator("div.skill-tree-category").nth(cat_index)
-#             header_loc = cat_block.locator(".skill-tree-skills-header").first
-#             if not header_loc.is_visible():
-#                 continue
-
-#             code_text = (header_loc.locator(".category-code").inner_text().strip()
-#                          if header_loc.locator(".category-code").count() > 0 else "")
-#             name_text = (header_loc.locator(".category-name").inner_text().strip()
-#                          if header_loc.locator(".category-name").count() > 0 else "")
-#             full_category_name = f"{code_text} {name_text}".strip()
-
-#             if not reached_start:
-#                 if START_CATEGORY in full_category_name.lower():
-#                     reached_start = True
-#                     print(f"\n[START] Found target category: {full_category_name}")
-#                 else:
-#                     print(f"  [SKIP] {full_category_name}")
-#                     continue
-
-#             skill_links = cat_block.locator("a.skill-tree-skill-link")
-#             skill_count = skill_links.count()
-
-#             for skill_index in range(skill_count):
-#                 current_skill = (page.locator("div.skill-tree-category").nth(cat_index)
-#                                  .locator("a.skill-tree-skill-link").nth(skill_index))
-
-#                 title_span = current_skill.locator("span.skill-tree-skill-name").first
-#                 skill_name = (title_span.inner_text().strip()
-#                               if title_span.count() > 0
-#                               else current_skill.inner_text().strip())
-
-#                 print(f"\n[{full_category_name}] Entering skill: {skill_name}")
-#                 current_skill.scroll_into_view_if_needed()
-#                 current_skill.click()
-
-#                 extract_and_advance(page, full_category_name, skill_name, serial_tracker)
-
-#                 print("  -> Retreating to main directory...")
-#                 try:
-#                     breadcrumb = page.locator(
-#                         'a.breadcrumb-link:has-text("Third grade"), '
-#                         'a.breadcrumb-link[href="/math/grade-3"], '
-#                         'a.breadcrumb-link[href="/maths/class-iii"]'
-#                     ).first
-#                     breadcrumb.wait_for(state="visible", timeout=10000)
-#                     breadcrumb.click()
-#                     page.wait_for_selector("div.skill-tree-category",
-#                                            state="attached", timeout=15000)
-#                 except Exception as e:
-#                     print(f"  [!] Failed to use breadcrumb. Forcing URL reload. {e}")
-#                     page.goto(TARGET_URL)
-#                     page.wait_for_selector("div.skill-tree-category",
-#                                            state="attached", timeout=15000)
-
-#         print("\nAll topics processed. Closing driver.")
-#         browser.close()
-
 def _choose_mode():
-    print("\n" + "=" * 50)
-    print("  IXL Grade 3 Scraper")
-    print("=" * 50)
+    print("\n  IXL Scraper\n")
     print("  [1]  Scrape entire website from scratch")
-    print("  [2]  Start from a specific skill URL")
-    print("       (set START_URL at the top of the file)")
-    print("=" * 50)
+    print(f"  [2]  Start from a specific skill URL - {' '.join(START_URL.split('/')[-1].split('.')[0].split('-')).title()}")
     while True:
-        choice = input("  Enter mode (1 or 2): ").strip()
+        choice = input("\n  Enter mode (1 or 2): ").strip()
         if choice in ("1", "2"):
             return int(choice)
         print("  Invalid choice. Please enter 1 or 2.")
