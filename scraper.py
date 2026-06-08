@@ -17,10 +17,10 @@ LOGIN_URL = "https://in.ixl.com/signin"
 EMAIL = "parkerhouston411@kacad"
 PASSWORD = "81party"
 QUESTIONS_PER_SKILL = 3
-EXCEL_FILENAME = "ixl_grade3_questions(1).xlsx"
+EXCEL_FILENAME = "ixl_grade3_questions.xlsx"
 IMAGE_DIR = "ixl_diagrams"
 
-# ── Mode 2: set this to the skill URL you want to resume from ─────────────────
+# Mode 2: set this to the skill URL you want to resume from
 START_URL = "https://www.ixl.com/math/grade-3/multiplication-facts-for-2-3-4-5-and-10-sorting"
 
 THIN = Side(style="thin", color="D9D9D9")
@@ -31,8 +31,6 @@ JUNK_LABELS = {"scratchpad", "eraser", "highlighter - blue",
 
 ICON_MAX = 32
 
-# ── gate signals: ONLY class-based, specific to IXL figure containers ─────────
-# svg[role=...] removed — too broad, catches UI icons and nav elements
 DIAGRAM_SIGNALS = [
     ".multiplication-model-container",
     ".guide-counting-qm",
@@ -53,16 +51,16 @@ Q_SCOPE_PARTS = [
     ".question-and-submission-view .secContent",
 ]
 
-# ── image dimensions in Excel ─────────────────────────────────────────────────
-EXCEL_IMG_MAX_W = 200   # px — max width when embedding in Excel
-EXCEL_IMG_MAX_H = 150   # px — max height when embedding in Excel
-EXCEL_ROW_HEIGHT_PER_IMG = 115  # Excel row height units per embedded image
+# image dimensions in Excel 
+EXCEL_IMG_MAX_W = 200  
+EXCEL_IMG_MAX_H = 150 
+EXCEL_ROW_HEIGHT_PER_IMG = 115  
 
 
 def setup_dir():
     os.makedirs(IMAGE_DIR, exist_ok=True)
 
-
+# Create excel if doesnt exist
 def init_excel():
     if os.path.exists(EXCEL_FILENAME):
         return
@@ -139,13 +137,13 @@ def append_to_excel(row_data, q_diagram_paths, opt_diagram_paths, ans_diagram_pa
             else:
                 cell.alignment = Alignment(vertical="center", wrap_text=True)
 
-        # ── columns H and I get borders even if no images ─────────────────────
+        # columns H and I get borders even if no images
         for col_idx in [8, 9]:
             cell = ws.cell(row=current_row, column=col_idx)
             cell.border = BORDER
             cell.alignment = Alignment(vertical="top")
 
-        # ── embed question diagrams into column H ─────────────────────────────
+        # embed question diagrams into column H
         h_col_letter = get_column_letter(8)
         q_img_count = 0
         for img_path in q_diagram_paths:
@@ -167,7 +165,7 @@ def append_to_excel(row_data, q_diagram_paths, opt_diagram_paths, ans_diagram_pa
             except Exception as e:
                 print(f"     [!] Could not embed image {img_path}: {e}")
 
-        # ── embed answer diagrams vertically in column G ─────────────────────
+        # embed answer diagrams vertically in column G
         if ans_diagram_paths:
             g_col_letter = get_column_letter(7)
             ans_img_count = 0
@@ -189,7 +187,7 @@ def append_to_excel(row_data, q_diagram_paths, opt_diagram_paths, ans_diagram_pa
                 except Exception as e:
                     print(f"     [!] Could not embed answer image {img_path}: {e}")
 
-        # ── embed option diagrams horizontally: I, J, K… (one image per column) ──
+        # embed option diagrams horizontally: I, J, K… (one image per column)
         opt_col = 9  # start at column I
         for img_path in opt_diagram_paths:
             if not os.path.exists(img_path):
@@ -211,7 +209,7 @@ def append_to_excel(row_data, q_diagram_paths, opt_diagram_paths, ans_diagram_pa
             except Exception as e:
                 print(f"     [!] Could not embed image {img_path}: {e}")
 
-        # ── ensure the base row is visible even if there are no images ────────
+        # ensure the base row is visible even if there are no images
         if not q_diagram_paths and not opt_diagram_paths:
             ws.row_dimensions[current_row].height = 40
         elif not ws.row_dimensions[current_row].height:
@@ -228,7 +226,7 @@ def append_to_excel(row_data, q_diagram_paths, opt_diagram_paths, ans_diagram_pa
         for col_idx, value in enumerate(row_data, start=1):
             ws.cell(row=current_row, column=col_idx, value=value)
         wb.save(EXCEL_FILENAME)
-
+# jscode to extract text from the question view
 _MATH_WALKER_JS = """
     const _DIAGRAM_CLASSES = [
         'dc-fraction-strip-model', 'open-number-line', 'graphingBaseContainer',
@@ -301,7 +299,7 @@ _MATH_WALKER_JS = """
                     if (operands.length > 0) {
                         const op = operator || '+';
                         
-                          += operands.join(' ' + op + ' ');
+                        out += operands.join(' ' + op + ' ');
                         if (answerBlanks > 0)
                             out += ' = ' + Array(answerBlanks).fill('__').join(' ');
                     }
@@ -613,8 +611,8 @@ def _collect_units_from_container(container, scope_label):
             return units
     return [container]
 
-#    Gate: checks ONLY inside .secHdr and .secContent.
-#   Each scope part queried independently — no comma-joining with signals.
+# Gate: checks ONLY inside .secHdr and .secContent.
+# Each scope part queried independently — no comma-joining with signals.
 def _question_has_diagram(page):
 
     for scope_part in Q_SCOPE_PARTS:
@@ -627,7 +625,7 @@ def _question_has_diagram(page):
                 pass
     return False
 
-#Gate: checks signals directly on a single option tile locator
+# checks signals directly on a single option tile locator
 def _tile_has_diagram(tile):
 
     for signal in DIAGRAM_SIGNALS:
@@ -854,7 +852,7 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
 # After submission, screenshot each bin (with placed tiles) as the correct answer.
 # Distinguishes the answer-state container from the question-state container by checking which binsContainer has tiles (draggableElement) placed inside its bins.
 def _screenshot_answer_bins(page, question_index, skill_name, ts):
-
+    # cleans filename for saving
     slug = skill_name.replace(" ", "_")[:40]
     paths = []
     try:
@@ -876,10 +874,6 @@ def _screenshot_answer_bins(page, question_index, skill_name, ts):
 
         if not all_candidates:
             return paths
-
-        # Prefer a container that has tiles placed inside bins (answer state).
-        # The question-state container has empty binContentDropSlots; the answer-state
-        # one has draggableElement tiles inside .bin elements.
         with_tiles = []
         for y, el in all_candidates:
             try:
@@ -890,6 +884,7 @@ def _screenshot_answer_bins(page, question_index, skill_name, ts):
 
         candidates = with_tiles if with_tiles else all_candidates
         candidates.sort(key=lambda t: t[0])
+        # selects the topmost container to take screenshot of valid image and ignore duplicates
         container = candidates[0][1]
 
         for b_idx, bin_el in enumerate(container.locator(".bin").all()):
@@ -919,12 +914,11 @@ def extract_and_advance(page, category_name, skill_name, serial_tracker):
             )
             page.wait_for_timeout(800)
 
-            if previous_question_text:
-                for _ in range(20):
-                    candidate = extract_question_text(page)
-                    if candidate and candidate != previous_question_text:
-                        break
-                    page.wait_for_timeout(500)
+            for _ in range(20):
+                candidate = extract_question_text(page)
+                if candidate and candidate != previous_question_text:
+                    break
+                page.wait_for_timeout(500)
         except Exception as e:
             print(f"     [!] Failed to stabilize DOM for question {i+1}: {e}")
             break
@@ -939,12 +933,14 @@ def extract_and_advance(page, category_name, skill_name, serial_tracker):
 
         correct_answer = ""
         try:
+            # First Submit button - for incomplete answers
             submit_btn = page.locator(
                 'button[data-cy="question-submit-button"], div.question button.submit'
             ).first
             submit_btn.wait_for(state="visible", timeout=10000)
             submit_btn.click()
-
+            
+            # Pop-up Submit button - for incomplete answers
             popup_btn = page.locator(
                 'button[data-cy="incomplete-answer-popover-submit-button"]'
             ).first
@@ -976,6 +972,7 @@ def extract_and_advance(page, category_name, skill_name, serial_tracker):
 
         if i < QUESTIONS_PER_SKILL - 1:
             try:
+                # Got it button
                 got_it_btn = page.locator(
                     'button:has-text("Got it"), .next-problem button'
                 ).first
@@ -1035,6 +1032,8 @@ def run_scraper():
 
         print("Authenticating...")
         page.goto(LOGIN_URL)
+        
+        # Fill in credentials
         page.fill("input[type='email'], input[name='username']", EMAIL)
         page.fill("input[type='password'], input[name='password']", PASSWORD)
         page.keyboard.press("Enter")
@@ -1088,7 +1087,8 @@ def run_scraper():
 
                 current_skill.scroll_into_view_if_needed()
                 current_skill.click()
-
+                
+                # This runs 3 times
                 extract_and_advance(page, full_category_name, skill_name, serial_tracker)
 
                 print("  -> Retreating to main directory...")
