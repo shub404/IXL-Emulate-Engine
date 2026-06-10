@@ -1,7 +1,7 @@
 ixl_state.json
-ixl_grade3_questions(1).xlsx
 ixl_grade3_questions.xlsx
 ixl_diagrams/
 __pycache__/
 *.env
-firstQues.html
+missedImages.html
+missingSkill.html

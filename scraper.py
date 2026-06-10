@@ -21,7 +21,7 @@ EXCEL_FILENAME = "ixl_grade3_questions.xlsx"
 IMAGE_DIR = "ixl_diagrams"
 
 # Mode 2: set this to the skill URL you want to resume from
-START_URL = "https://www.ixl.com/math/grade-3/multiplication-facts-for-2-3-4-5-and-10-sorting"
+START_URL = "https://www.ixl.com/math/grade-3/division-facts-up-to-12"
 
 THIN = Side(style="thin", color="D9D9D9")
 BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
@@ -43,8 +43,13 @@ DIAGRAM_SIGNALS = [
     '[role="figure"]',
     "table.old-table",
     "table.qTabularGrid",
+    ".qPVTable",
     "svg:has(g.grid-region)",
     "div.table:has([data-testid='area-model-cell'])",
+    ".gc-cut-shapes",
+    ".fractionTopBlockDiv",
+    ".horizontal-scroll-element-wrapper",
+    ".horizontal-scroll-hoc-wrapper",
 ]
 
 Q_SCOPE_PARTS = [
@@ -69,7 +74,8 @@ def init_excel():
     ws.title = "Grade 3 Maths"
     headers = ["#", "Category", "Skill Name", "Question No",
                "Question Text", "Answer Options", "Correct Answer",
-               "Question Diagrams", "Option Diagrams"]
+               "Question Diagrams", "Option Diagrams",
+               "Example Question", "Example Options", "Example Diagram", "Example Solution"]
     header_font = Font(name="Calibri", bold=True, size=11)
 
     for col, label in enumerate(headers, start=1):
@@ -79,12 +85,13 @@ def init_excel():
         cell.border = BORDER
 
     widths = {"A": 6, "B": 30, "C": 45, "D": 12,
-              "E": 70, "F": 35, "G": 30, "H": 30, "I": 30}
+              "E": 70, "F": 35, "G": 30, "H": 30, "I": 30,
+              "J": 70, "K": 35, "L": 30, "M": 70}
     for col, w in widths.items():
         ws.column_dimensions[col].width = w
 
     ws.freeze_panes = "A2"
-    ws.auto_filter.ref = "A1:I1"
+    ws.auto_filter.ref = "A1:M1"
     wb.save(EXCEL_FILENAME)
 
 
@@ -109,10 +116,10 @@ def _scale_image_for_excel(img_path):
     return xl_img
 
 
-def append_to_excel(row_data, q_diagram_paths, opt_diagram_paths, ans_diagram_paths=None):
+def append_to_excel(row_data, q_diagram_paths, opt_diagram_paths, ans_diagram_paths=None, ex_diagram_paths=None):
     """
-    Writes a data row and embeds diagram images directly into columns H and I+.
-    row_data must have 7 values (columns A–G); H and I are handled via images.
+    Writes a data row and embeds diagram images directly into columns H, I, and L.
+    row_data must have 10 values for columns A-G, J, K, M.
     If ans_diagram_paths is provided, col G gets images (vertically) instead of text.
     """
     try:
@@ -121,8 +128,14 @@ def append_to_excel(row_data, q_diagram_paths, opt_diagram_paths, ans_diagram_pa
         current_row = ws.max_row + 1
         cell_font = Font(name="Calibri", size=11)
 
-        # ── write columns A–G (skip G if answer images are provided) ─────────
-        for col_idx, value in enumerate(row_data, start=1):
+        text_columns = {
+            1: row_data[0], 2: row_data[1], 3: row_data[2], 4: row_data[3],
+            5: row_data[4], 6: row_data[5], 7: row_data[6],
+            10: row_data[7], 11: row_data[8], 13: row_data[9]
+        }
+
+        # ── write text columns ─────────
+        for col_idx, value in text_columns.items():
             if col_idx == 7 and ans_diagram_paths:
                 # Col G will hold images instead — write border/alignment only
                 cell = ws.cell(row=current_row, column=col_idx)
@@ -135,10 +148,10 @@ def append_to_excel(row_data, q_diagram_paths, opt_diagram_paths, ans_diagram_pa
             if col_idx in [1, 4]:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
             else:
-                cell.alignment = Alignment(vertical="center", wrap_text=True)
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
 
-        # columns H and I get borders even if no images
-        for col_idx in [8, 9]:
+        # image columns get borders even if no images
+        for col_idx in [8, 9, 12]:
             cell = ws.cell(row=current_row, column=col_idx)
             cell.border = BORDER
             cell.alignment = Alignment(vertical="top")
@@ -187,32 +200,51 @@ def append_to_excel(row_data, q_diagram_paths, opt_diagram_paths, ans_diagram_pa
                 except Exception as e:
                     print(f"     [!] Could not embed answer image {img_path}: {e}")
 
-        # embed option diagrams horizontally: I, J, K… (one image per column)
-        opt_col = 9  # start at column I
+        # embed option diagrams vertically in column I
+        i_col_letter = get_column_letter(9)
+        opt_img_count = 0
         for img_path in opt_diagram_paths:
             if not os.path.exists(img_path):
                 continue
             try:
                 xl_img = _scale_image_for_excel(img_path)
-                col_letter = get_column_letter(opt_col)
-                ws.add_image(xl_img, f"{col_letter}{current_row}")
-                cell = ws.cell(row=current_row, column=opt_col)
+                anchor_row = current_row + opt_img_count
+                ws.add_image(xl_img, f"{i_col_letter}{anchor_row}")
+                cell = ws.cell(row=anchor_row, column=9)
                 cell.border = BORDER
                 cell.alignment = Alignment(vertical="top")
-                if ws.column_dimensions[col_letter].width < 30:
-                    ws.column_dimensions[col_letter].width = 30
-                ws.row_dimensions[current_row].height = max(
-                    ws.row_dimensions[current_row].height or 0,
+                ws.row_dimensions[anchor_row].height = max(
+                    ws.row_dimensions[anchor_row].height or 0,
                     xl_img.height * 0.75 + 6
                 )
-                opt_col += 1
+                opt_img_count += 1
             except Exception as e:
-                print(f"     [!] Could not embed image {img_path}: {e}")
+                print(f"     [!] Could not embed option image {img_path}: {e}")
+
+        # embed example diagrams vertically in column L
+        if ex_diagram_paths:
+            ex_col_letter = get_column_letter(12)
+            ex_img_count = 0
+            for img_path in ex_diagram_paths:
+                if not os.path.exists(img_path):
+                    continue
+                try:
+                    xl_img = _scale_image_for_excel(img_path)
+                    anchor_row = current_row + ex_img_count
+                    ws.add_image(xl_img, f"{ex_col_letter}{anchor_row}")
+                    cell = ws.cell(row=anchor_row, column=12)
+                    cell.border = BORDER
+                    cell.alignment = Alignment(vertical="top")
+                    ws.row_dimensions[anchor_row].height = max(
+                        ws.row_dimensions[anchor_row].height or 0,
+                        xl_img.height * 0.75 + 6
+                    )
+                    ex_img_count += 1
+                except Exception as e:
+                    print(f"     [!] Could not embed example image {img_path}: {e}")
 
         # ensure the base row is visible even if there are no images
-        if not q_diagram_paths and not opt_diagram_paths:
-            ws.row_dimensions[current_row].height = 40
-        elif not ws.row_dimensions[current_row].height:
+        if not ws.row_dimensions[current_row].height:
             ws.row_dimensions[current_row].height = 40
 
         wb.save(EXCEL_FILENAME)
@@ -223,15 +255,24 @@ def append_to_excel(row_data, q_diagram_paths, opt_diagram_paths, ans_diagram_pa
         wb = load_workbook(EXCEL_FILENAME)
         ws = wb.active
         current_row = ws.max_row + 1
-        for col_idx, value in enumerate(row_data, start=1):
+        
+        text_columns = {
+            1: row_data[0], 2: row_data[1], 3: row_data[2], 4: row_data[3],
+            5: row_data[4], 6: row_data[5], 7: row_data[6],
+            10: row_data[7], 11: row_data[8], 13: row_data[9]
+        }
+        for col_idx, value in text_columns.items():
             ws.cell(row=current_row, column=col_idx, value=value)
         wb.save(EXCEL_FILENAME)
+
 # jscode to extract text from the question view
 _MATH_WALKER_JS = """
     const _DIAGRAM_CLASSES = [
         'dc-fraction-strip-model', 'open-number-line', 'graphingBaseContainer',
         'pie-chart', 'multiplication-model-container', 'guide-counting-qm',
-        'vector-image-wrapper', 'parking-lot', 'old-table', 'binsContainer', 'qTabularGrid', 'table'
+        'vector-image-wrapper', 'parking-lot', 'old-table', 'binsContainer', 'qTabularGrid', 'table',
+        'gc-cut-shapes', 'shape', 'fractionTopBlockDiv', 'SelectableTile', 'TileMultipleChoices',
+        'ddItemBankDropSlot', 'answer-box'
     ];
     let out = '';
     const walk = (node) => {
@@ -240,12 +281,13 @@ _MATH_WALKER_JS = """
                 out += child.textContent;
             } else if (child.nodeType === Node.ELEMENT_NODE) {
                 if (child.getAttribute('aria-hidden') === 'true') continue;
-                if (child.classList && _DIAGRAM_CLASSES.some(c => child.classList.contains(c))) continue;
                 const tag = child.tagName.toLowerCase();
+                if (tag === 'button') continue;
+                // --- Math-expression checks FIRST (before diagram-class skip) ---
                 if (tag === 'input' && child.classList.contains('fillIn')) {
-                    out += '__';
+                    out += '_';
                 } else if (tag === 'div' && child.classList && child.classList.contains('drop-slot')) {
-                    out += '___';
+                    out += '_';
                 } else if (tag === 'table' && child.hasAttribute('audioalt')) {
                     // Old-style fraction table on option tiles: <table audioalt="2/3">
                     out += child.getAttribute('audioalt');
@@ -263,9 +305,9 @@ _MATH_WALKER_JS = """
                 } else if (child.classList && child.classList.contains('vFrac')) {
                     const numEl = child.querySelector('.numerator');
                     const denEl = child.querySelector('.denominator');
-                    const numText = (numEl && numEl.querySelector('input.fillIn')) ? '__'
+                    const numText = (numEl && numEl.querySelector('input.fillIn')) ? '_'
                                   : (numEl ? numEl.textContent.trim() : '?');
-                    const denText = (denEl && denEl.querySelector('input.fillIn')) ? '__'
+                    const denText = (denEl && denEl.querySelector('input.fillIn')) ? '_'
                                   : (denEl ? denEl.textContent.trim() : '?');
                     out += numText + '/' + denText;
                 } else if (child.classList && child.classList.contains('vertArith')) {
@@ -281,8 +323,13 @@ _MATH_WALKER_JS = """
                         const opCell = row.querySelector('.vertArithCell.operator');
                         if (opCell) {
                             let sym = opCell.textContent.trim();
-                            sym = sym === '–' ? '-' : sym === '÷' ? '/' : sym;
+                            sym = sym === '\\u2013' ? '-' : sym === '\\u00f7' ? '/' : (sym === '\\u00d7' || sym === '×') ? 'x' : sym;
                             if (!operator) operator = sym;
+                        } else {
+                            const xSym = row.querySelector('.xSymbol');
+                            if (xSym) {
+                                operator = 'x';
+                            }
                         }
                         let numStr = '';
                         for (const cell of row.querySelectorAll('.vertArithCell')) {
@@ -292,6 +339,11 @@ _MATH_WALKER_JS = """
                             else if (cell.classList.contains('rtlCell')) {
                                 const d = cell.textContent.trim();
                                 if (d) numStr += d;
+                            } else {
+                                const expNums = cell.querySelectorAll('.expression.number');
+                                for (const expNum of expNums) {
+                                    numStr += expNum.textContent.trim();
+                                }
                             }
                         }
                         if (numStr) operands.push(numStr);
@@ -299,9 +351,15 @@ _MATH_WALKER_JS = """
                     if (operands.length > 0) {
                         const op = operator || '+';
                         
-                        out += operands.join(' ' + op + ' ');
-                        if (answerBlanks > 0)
-                            out += ' = ' + Array(answerBlanks).fill('__').join(' ');
+                        let eq = operands.join(' ' + op + ' ');
+                        if (answerBlanks > 0) {
+                            eq += ' = ' + Array(answerBlanks).fill('_').join(' ');
+                        }
+                        if (op === 'x' || op === '\\u00d7' || op === '×') {
+                            out += 'Multiply: ' + eq;
+                        } else {
+                            out += eq;
+                        }
                     }
                 } else if (child.classList && child.classList.contains('old-vertiArith')) {
                     const rows = [...child.querySelectorAll('table tr')];
@@ -313,17 +371,17 @@ _MATH_WALKER_JS = """
                         for (let i = 0; i < cells.length; i++) {
                             if (i === 0) {
                                 const t = cells[i].textContent.trim();
-                                if (t && t !== ' ') {
-                                    operator = t === '–' ? '-' : t === '÷' ? '/' : t;
+                                if (t && t !== ' ') {
+                                    operator = t === '\\u2013' ? '-' : t === '\\u00f7' ? '/' : t;
                                 }
                                 continue;
                             }
                             const fi = cells[i].querySelector('input.fillIn');
-                            if (fi) { numStr += '__'; }
+                            if (fi) { numStr += '_'; }
                             else {
                                 const inner = cells[i].querySelector('div') || cells[i];
                                 const t = inner.textContent.trim();
-                                if (t && t !== ' ') numStr += t;
+                                if (t && t !== ' ') numStr += t;
                             }
                         }
                         if (numStr) entries.push(numStr);
@@ -333,6 +391,9 @@ _MATH_WALKER_JS = """
                         out += entries[0] + ' ' + op + ' ' + entries[1];
                         if (entries.length >= 3) out += ' = ' + entries[2];
                     }
+                // --- NOW skip diagram containers (after all math checks) ---
+                } else if (child.classList && _DIAGRAM_CLASSES.some(c => child.classList.contains(c))) {
+                    continue;
                 } else {
                     walk(child);
                 }
@@ -377,28 +438,107 @@ def _extract_math_text(page, root_selector):
         return None
 
 
-def extract_question_text(page):
-    for sel in (".question-and-submission-view .math.section",
-                ".question-and-submission-view .ixl-practice-crate",
-                ".ixl-practice-crate"):
-        rebuilt = _reconstruct_with_blanks(page, sel)
-        # To clean the string and remove additional spaces
-        if rebuilt is not None:
-            text = " ".join(rebuilt.replace("\n", " ").split())
-            return text
+def _normalize_math_text(text):
+    """Normalize Unicode math symbols to plain-text equivalents."""
+    if not text:
+        return text
+    # Replace Unicode multiplication signs with 'x'
+    text = text.replace('\u00d7', ' x ')   # ×
+    text = text.replace('\u00b7', ' x ')   # ·  (middle dot often used for mult)
+    text = text.replace('\u22c5', ' x ')   # ⋅
+    # Replace Unicode minus/dash with '-'
+    text = text.replace('\u2013', '-')      # –  en-dash
+    text = text.replace('\u2212', '-')      # −  minus sign
+    # Replace Unicode division sign with '/'
+    text = text.replace('\u00f7', '/')      # ÷
+    # Collapse multiple spaces
+    text = ' '.join(text.split())
+    return text
+
+
+def _get_active_question(page):
+    _q_candidates = []
+    _seen_q_coords = set()
+    for _scope in (".question-and-submission-view", ".ixl-practice-crate"):
+        try:
+            for _el in page.locator(_scope).all():
+                _bb = _safe_bbox(_el)
+                if _bb is None or _bb["width"] < 1 or _bb["height"] < 1 or _bb["y"] < 0:
+                    continue
+                _coord = (round(_bb["x"]), round(_bb["y"]), round(_bb["width"]), round(_bb["height"]))
+                if _coord not in _seen_q_coords:
+                    _seen_q_coords.add(_coord)
+                    _q_candidates.append((_bb["y"], _el))
+        except Exception:
+            pass
+
+    if _q_candidates:
+        _q_candidates.sort(key=lambda t: t[0])
+        return _q_candidates[0][1]
+    return None
+
+
+def extract_question_text(page, root_locator=None):
+    if root_locator is not None:
+        active_q = root_locator
+    else:
+        active_q = _get_active_question(page)
+        if not active_q:
+            active_q = page.locator(".ixl-practice-crate").first
+            if active_q.count() == 0:
+                active_q = page.locator(".question-and-submission-view").first
+
+    if active_q and active_q.count() > 0:
+        try:
+            js = f"el => {{ {_MATH_WALKER_JS} walk(el); return out.trim(); }}"
+            rebuilt = active_q.evaluate(js)
+            if rebuilt:
+                text = " ".join(rebuilt.replace("\n", " ").split())
+                return _normalize_math_text(text)
+        except Exception as e:
+            print(f"     [!] active_q evaluate failed: {e}")
+
+    # Fallback to old-style logic if active_q evaluation fails or is empty
+    if root_locator is not None:
+        scopes = [root_locator]
+    else:
+        scopes = [
+            page.locator(".question-and-submission-view .math.section").first,
+            page.locator(".question-and-submission-view .ixl-practice-crate").first,
+            page.locator(".ixl-practice-crate").first
+        ]
+        
+    for sel_loc in scopes:
+        if sel_loc.count() > 0:
+            try:
+                js_reconstruct = f"el => {{ if (!el.querySelector('input.fillIn')) return null; {_MATH_WALKER_JS} walk(el); return out; }}"
+                rebuilt = sel_loc.evaluate(js_reconstruct)
+                if rebuilt is not None:
+                    text = " ".join(rebuilt.replace("\n", " ").split())
+                    return _normalize_math_text(text)
+            except Exception:
+                pass
 
     question_text = ""
-    hdr     = page.locator(".secHdr").first
-    content = page.locator(".secContent").first
-    crate   = page.locator(".ixl-practice-crate").first
+    scope = root_locator if root_locator is not None else page
+    hdr     = scope.locator(".secHdr").first
+    content = scope.locator(".secContent").first
+    crate   = root_locator if root_locator is not None else scope.locator(".ixl-practice-crate").first
 
     try:
         parts = []
+        js_extract = f"el => {{ {_MATH_WALKER_JS} walk(el); return out.trim() || null; }}"
         if hdr.count() > 0 and hdr.is_visible():
-            hdr_text = _extract_math_text(page, ".secHdr")
+            try:
+                hdr_text = hdr.evaluate(js_extract)
+            except Exception:
+                hdr_text = None
             parts.append(hdr_text if hdr_text else hdr.inner_text())
         if content.count() > 0 and content.is_visible():
-            content_text = _extract_math_text(page, ".secContent")
+            try:
+                content_text = content.evaluate(js_extract)
+            except Exception:
+                content_text = None
             if content_text and content_text.strip():
                 parts.append(content_text)
         if parts:
@@ -406,47 +546,56 @@ def extract_question_text(page):
                 " ".join(p.replace("\n", " ").split()) for p in parts if p.strip()
             )
         elif crate.count() > 0 and crate.is_visible():
-            crate_text = _extract_math_text(page, ".ixl-practice-crate")
-            # Accept the entire dirty string if no question appears
-            # Clean the text by removing 'Submit' and extra spaces
+            try:
+                crate_text = crate.evaluate(js_extract)
+            except Exception:
+                crate_text = None
             question_text = " ".join(
                 (crate_text or crate.inner_text()).split("Submit")[0].replace("\n", " ").split()
             )
     except Exception as e:
         print(f"     [!] text read failed: {e}")
 
-    return question_text
+    return _normalize_math_text(question_text)
 
 
-def extract_options(page):
+def extract_options(page, root_locator=None):
     options = []
-    tiles = page.locator(
-        ".question-and-submission-view .SelectableTile, "
-        ".ixl-practice-crate .SelectableTile"
-    ).all()
+    
+    if root_locator is not None:
+        tiles = root_locator.locator(".SelectableTile").all()
+    else:
+        tiles = page.locator(
+            ".question-and-submission-view .SelectableTile, "
+            ".ixl-practice-crate .SelectableTile"
+        ).all()
+        
     _walker_js = f"el => {{ {_MATH_WALKER_JS} walk(el); return out.trim(); }}"
     for tile in tiles:
         try:
-            label = tile.get_attribute("aria-label") or ""
-            if not label.strip():
-                # No aria-label: old-style fraction tiles use audioalt on the inner table.
-                # Extract via JS walker on .GeneticallyModified content.
-                gm = tile.locator(".GeneticallyModified").first
-                if gm.count() > 0:
-                    try:
-                        label = gm.evaluate(_walker_js) or ""
-                    except Exception:
-                        label = gm.inner_text()
+            gm = tile.locator(".GeneticallyModified").first
+            if gm.count() > 0:
+                try:
+                    label = gm.evaluate(_walker_js) or ""
+                except Exception:
+                    label = gm.inner_text()
+            else:
+                label = tile.get_attribute("aria-label") or tile.inner_text() or ""
             if label and label.strip():
-                options.append(label.strip())
+                clean_label = " ".join(label.replace("\n", " ").split())
+                options.append(clean_label)
         except Exception:
             continue
+            
     # Drag-and-drop questions: options are draggable tiles in .parking-lot
     if not options:
-        drag_tiles = page.locator(
-            ".question-and-submission-view .parking-lot .draggable-tile, "
-            ".ixl-practice-crate .parking-lot .draggable-tile"
-        ).all()
+        if root_locator is not None:
+            drag_tiles = root_locator.locator(".parking-lot .draggable-tile").all()
+        else:
+            drag_tiles = page.locator(
+                ".question-and-submission-view .parking-lot .draggable-tile, "
+                ".ixl-practice-crate .parking-lot .draggable-tile"
+            ).all()
         for tile in drag_tiles:
             try:
                 try:
@@ -461,10 +610,13 @@ def extract_options(page):
 
     # Sorting drag-and-drop: tiles in .ddItemBankDropSlot
     if not options:
-        bank_slots = page.locator(
-            ".question-and-submission-view .ddItemBankDropSlot, "
-            ".ixl-practice-crate .ddItemBankDropSlot"
-        ).all()
+        if root_locator is not None:
+            bank_slots = root_locator.locator(".ddItemBankDropSlot").all()
+        else:
+            bank_slots = page.locator(
+                ".question-and-submission-view .ddItemBankDropSlot, "
+                ".ixl-practice-crate .ddItemBankDropSlot"
+            ).all()
         for slot in bank_slots:
             try:
                 content = slot.locator(".itemContent").first
@@ -543,8 +695,16 @@ def extract_correct_answer(page):
 
 def _safe_bbox(element):
     try:
-        # Returns physical screen coordinated and dimensions of web element
-        return element.bounding_box()
+        # Returns page-relative coordinates and dimensions of web element
+        return element.evaluate("""el => {
+            const rect = el.getBoundingClientRect();
+            return {
+                x: rect.left + window.scrollX,
+                y: rect.top + window.scrollY,
+                width: rect.width,
+                height: rect.height
+            };
+        }""")
     except Exception:
         return None
 
@@ -642,22 +802,7 @@ def extract_diagrams_screenshots(page, question_index, skill_name):
     slug = skill_name.replace(" ", "_")[:40]
     ts = int(time.time())
 
-    q_paths = []
-    opt_paths = []
-    if _question_has_diagram(page):
-        q_paths = _extract_from_scope(
-            page=page,
-            scope_parts=Q_SCOPE_PARTS,
-            root_locator=None,
-            scope_label="Q",
-            prefix=f"{slug}_q{question_index + 1}",
-            ts=ts,
-        )
-
-    # _keep_largest intentionally removed: L1_INTEGRATED phantom de-dupe handles single-type
-    # diagrams; L1_MULTI diagrams (number lines, pie charts) may have multiple real instances.
-
-    # Find active question container to avoid duplicate phantom options
+    # Find active question container to avoid duplicate phantom elements
     _q_candidates = []
     _seen_q_coords = set()
     for _scope in (".question-and-submission-view", ".ixl-practice-crate"):
@@ -673,26 +818,56 @@ def extract_diagrams_screenshots(page, question_index, skill_name):
         except Exception:
             pass
 
-    active_tiles = []
+    _active_q = None
     if _q_candidates:
         _q_candidates.sort(key=lambda t: t[0])
         _active_q = _q_candidates[0][1]
+    else:
+        _active_q = page.locator("body")
+
+    q_paths = []
+    opt_paths = []
+
+    if _active_q:
+        active_content = _active_q.locator(".secContent")
+        if active_content.count() == 0:
+            active_content = _active_q
+        # Check if active question has diagrams
+        has_diagram = False
+        for signal in DIAGRAM_SIGNALS:
+            try:
+                if active_content.locator(signal).count() > 0:
+                    has_diagram = True
+                    break
+            except Exception:
+                pass
+
+        if has_diagram:
+            q_paths = _extract_from_scope(
+                page=page,
+                scope_parts=Q_SCOPE_PARTS,
+                root_locator=active_content,
+                scope_label="Q",
+                prefix=f"{slug}_q{question_index + 1}",
+                ts=ts,
+            )
+
+        # Process option tiles inside the active question
         active_tiles = _active_q.locator(".SelectableTile").all()
+        for t_idx, tile in enumerate(active_tiles):
+            tile_class = tile.get_attribute("class") or ""
+            if "TEXT" in tile_class.split():
+                continue
+            if not _tile_has_diagram(tile):
+                continue
 
-    for t_idx, tile in enumerate(active_tiles):
-        tile_class = tile.get_attribute("class") or ""
-        if "TEXT" in tile_class.split():
-            continue
-        if not _tile_has_diagram(tile):
-            continue
-
-        bb = _wait_for_element_painted(tile)
-        if bb and bb["width"] > 2 and bb["height"] > 2:
-            idx = len(opt_paths) + 1
-            path = os.path.join(IMAGE_DIR, f"{slug}_q{question_index + 1}_opt{idx}_{ts}.png")
-            if _screenshot_element(tile, path):
-                opt_paths.append(path)
-                print(f"       [Opt{idx}] SAVED tile screenshot: {path}")
+            bb = _wait_for_element_painted(tile)
+            if bb and bb["width"] > 2 and bb["height"] > 2:
+                idx = len(opt_paths) + 1
+                path = os.path.join(IMAGE_DIR, f"{slug}_q{question_index + 1}_opt{idx}_{ts}.png")
+                if _screenshot_element(tile, path):
+                    opt_paths.append(path)
+                    print(f"       [Opt{idx}] SAVED tile screenshot: {path}")
 
     # Sorting drag-and-drop bins: find the live binsContainer (topmost y = active
     # question), then screenshot only its direct .bin children. IXL pre-renders
@@ -714,10 +889,23 @@ def extract_diagrams_screenshots(page, question_index, skill_name):
         except Exception:
             pass
 
+    # for bins- first, dropArea, last
     if _bin_candidates:
         _bin_candidates.sort(key=lambda t: t[0])
         _active_container = _bin_candidates[0][1]
-        for b_idx, bin_el in enumerate(_active_container.locator(".bin").all()):
+        bins_to_screenshot = []
+        first_bin = _active_container.locator(".bin.first").first
+        if first_bin.count() > 0:
+            bins_to_screenshot.append(first_bin)
+        bins_to_screenshot.extend(_active_container.locator(".bin:not(.first):not(.last)").all())
+        last_bin = _active_container.locator(".bin.last").first
+        if last_bin.count() > 0:
+            bins_to_screenshot.append(last_bin)
+        
+        if not bins_to_screenshot:
+            bins_to_screenshot = _active_container.locator(".bin").all()
+
+        for b_idx, bin_el in enumerate(bins_to_screenshot):
             try:
                 bb = _wait_for_element_painted(bin_el)
                 if bb is None or bb["width"] < 2 or bb["height"] < 2:
@@ -811,18 +999,29 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
                     pass
             return results
 
-    L1_INTEGRATED = {
-        ".open-number-line", ".dc-fraction-strip-model",
-        "table.old-table", "table.qTabularGrid",
-        "svg:has(g.grid-region)",
+    L1_INTEGRATED = [
+        ".horizontal-scroll-hoc-wrapper",
+        ".horizontal-scroll-element-wrapper",
+        ".multiplication-model-container",
+        ".fractionTopBlockDiv",
+        ".open-number-line",
+        ".dc-fraction-strip-model",
         "div.table:has([data-testid='area-model-cell'])",
-    }
+        "table.old-table",
+        "table.qTabularGrid",
+        "svg:has(g.grid-region)",
+        ".gc-cut-shapes",
+        "canvas",
+        '[role="figure"]',
+        ".shape",
+        ".vector-image-wrapper",
+    ]
     # These can have multiple real instances per question (e.g. two number lines for
     # equivalence questions, or a standalone pie chart) — no phantom de-dupe applied.
-    L1_MULTI      = {".graphingBaseContainer", ".pie-chart"}
-    L1_REPEATING  = {".multiplication-model-container", ".guide-counting-qm"}
+    L1_MULTI      = [".graphingBaseContainer", ".pie-chart", ".qPVTable"]
+    L1_REPEATING  = [".guide-counting-qm"]
 
-    for container_sel in list(L1_INTEGRATED) + list(L1_MULTI) + list(L1_REPEATING):
+    for container_sel in L1_INTEGRATED + L1_MULTI + L1_REPEATING:
         containers = get_elements(container_sel)
 
         # For integrated single-figure diagrams in the QUESTION scope, IXL pre-renders upcoming-question copies stacked below the live one.
@@ -849,12 +1048,38 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
 
     return paths
 
-# After submission, screenshot each bin (with placed tiles) as the correct answer.
-# Distinguishes the answer-state container from the question-state container by checking which binsContainer has tiles (draggableElement) placed inside its bins.
-def _screenshot_answer_bins(page, question_index, skill_name, ts):
-    # cleans filename for saving
+# After submission, screenshot regular diagrams in the answer box and each bin (with placed tiles) as the correct answer.
+def _screenshot_answer_diagrams(page, question_index, skill_name, ts):
     slug = skill_name.replace(" ", "_")[:40]
     paths = []
+
+    # 1. Extract regular diagrams inside the answer box
+    try:
+        answer_box = page.locator(".answer-box").first
+        if answer_box.count() > 0 and answer_box.is_visible():
+            has_diagram = False
+            for signal in DIAGRAM_SIGNALS:
+                try:
+                    if answer_box.locator(signal).count() > 0:
+                        has_diagram = True
+                        break
+                except Exception:
+                    pass
+
+            if has_diagram:
+                ans_diag_paths = _extract_from_scope(
+                    page=page,
+                    scope_parts=[], 
+                    root_locator=answer_box,
+                    scope_label="Ans",
+                    prefix=f"{slug}_q{question_index + 1}_ans",
+                    ts=ts,
+                )
+                paths.extend(ans_diag_paths)
+    except Exception as e:
+        print(f"     [!] answer diagram screenshot failed: {e}")
+
+    # 2. Extract answer bins
     try:
         all_candidates = []
         seen_coords = set()
@@ -872,32 +1097,44 @@ def _screenshot_answer_bins(page, question_index, skill_name, ts):
             except Exception:
                 pass
 
-        if not all_candidates:
-            return paths
-        with_tiles = []
-        for y, el in all_candidates:
-            try:
-                if el.locator(".bin .draggableElement").count() > 0:
-                    with_tiles.append((y, el))
-            except Exception:
-                pass
+        if all_candidates:
+            with_tiles = []
+            for y, el in all_candidates:
+                try:
+                    if el.locator(".bin .draggableElement").count() > 0:
+                        with_tiles.append((y, el))
+                except Exception:
+                    pass
 
-        candidates = with_tiles if with_tiles else all_candidates
-        candidates.sort(key=lambda t: t[0])
-        # selects the topmost container to take screenshot of valid image and ignore duplicates
-        container = candidates[0][1]
+            candidates = with_tiles if with_tiles else all_candidates
+            candidates.sort(key=lambda t: t[0])
+            # selects the topmost container to take screenshot of valid image and ignore duplicates
+            container = candidates[0][1]
 
-        for b_idx, bin_el in enumerate(container.locator(".bin").all()):
-            bb = _wait_for_element_painted(bin_el)
-            if bb is None or bb["width"] < 2 or bb["height"] < 2:
-                continue
-            path = os.path.join(IMAGE_DIR,
-                                f"{slug}_q{question_index + 1}_ans_bin{b_idx + 1}_{ts}.png")
-            if _screenshot_element(bin_el, path):
-                paths.append(path)
-                print(f"       [AnsBin{b_idx + 1}] SAVED answer bin: {path}")
+            bins_to_screenshot = []
+            first_bin = container.locator(".bin.first").first
+            if first_bin.count() > 0:
+                bins_to_screenshot.append(first_bin)
+            bins_to_screenshot.extend(container.locator(".bin:not(.first):not(.last)").all())
+            last_bin = container.locator(".bin.last").first
+            if last_bin.count() > 0:
+                bins_to_screenshot.append(last_bin)
+            
+            if not bins_to_screenshot:
+                bins_to_screenshot = container.locator(".bin").all()
+
+            for b_idx, bin_el in enumerate(bins_to_screenshot):
+                bb = _wait_for_element_painted(bin_el)
+                if bb is None or bb["width"] < 2 or bb["height"] < 2:
+                    continue
+                path = os.path.join(IMAGE_DIR,
+                                    f"{slug}_q{question_index + 1}_ans_bin{b_idx + 1}_{ts}.png")
+                if _screenshot_element(bin_el, path):
+                    paths.append(path)
+                    print(f"       [AnsBin{b_idx + 1}] SAVED answer bin: {path}")
     except Exception as e:
         print(f"     [!] answer bin screenshot failed: {e}")
+        
     return paths
 
 
@@ -931,6 +1168,54 @@ def extract_and_advance(page, category_name, skill_name, serial_tracker):
         if not question_text:
             print(f"     [!] WARNING: empty question text on Q{i+1}")
 
+        ex_q_text = ""
+        ex_opt_text = ""
+        ex_sol_text = ""
+        ex_diagrams = []
+
+        if i == 0:
+            try:
+                example_btn = page.locator(".see-example button, button.border-button:has-text('Learn with an example')").first
+                if example_btn.count() > 0 and example_btn.is_visible():
+                    example_btn.click()
+                    page.wait_for_selector(".ixl-practice-crate.disabled-question", state="visible", timeout=5000)
+                    page.wait_for_timeout(1000)
+                    
+                    ex_q_container = page.locator(".ixl-practice-crate.disabled-question").first
+                    ex_q_text = extract_question_text(page, root_locator=ex_q_container)
+                    ex_opt_text = extract_options(page, root_locator=ex_q_container)
+
+                    ex_sol_container = page.locator(".tab-box, .exp-solve").first
+                    if ex_sol_container.count() > 0:
+                        js_sol = f"el => {{ {_MATH_WALKER_JS} walk(el); return out.trim(); }}"
+                        try:
+                            sol_val = ex_sol_container.evaluate(js_sol)
+                            if sol_val:
+                                ex_sol_text = " ".join(sol_val.replace("\n", " ").split())
+                        except Exception as e:
+                            print(f"     [!] Example solution text extraction failed: {e}")
+                            
+                        ts_ex = int(time.time())
+                        ex_diagrams = _extract_from_scope(
+                            page=page,
+                            scope_parts=[],
+                            root_locator=ex_sol_container,
+                            scope_label="ExSol",
+                            prefix=f"{skill_name.replace(' ', '_')[:40]}_ex",
+                            ts=ts_ex
+                        )
+                        
+                    back_btn = page.locator(".back-to-practice button, button:has-text('Back to practice')").first
+                    if back_btn.count() > 0 and back_btn.is_visible():
+                        back_btn.click()
+                        page.wait_for_timeout(1000)
+                    else:
+                        print("     [!] Back to practice button not found. Attempting to click toggle again.")
+                        example_btn.click()
+                        page.wait_for_timeout(1000)
+            except Exception as e:
+                print(f"     [!] Example processing failed: {e}")
+
         correct_answer = ""
         try:
             # First Submit button - for incomplete answers
@@ -954,10 +1239,9 @@ def extract_and_advance(page, category_name, skill_name, serial_tracker):
             print(f"     [!] Could not read correct answer on Q{i+1}: {e}")
 
         ts_ans = int(time.time())
-        ans_diagrams = _screenshot_answer_bins(page, i, skill_name, ts_ans)
+        ans_diagrams = _screenshot_answer_diagrams(page, i, skill_name, ts_ans)
 
-        # row_data = columns A–G only (7 values)
-        # H and I+ are handled by append_to_excel via image embedding
+        # row_data = columns A-G, J, K, M (10 values)
         row_vals = [
             serial_tracker[0] if i == 0 else "",
             category_name     if i == 0 else "",
@@ -966,9 +1250,13 @@ def extract_and_advance(page, category_name, skill_name, serial_tracker):
             question_text,
             options_text,
             correct_answer,
+            ex_q_text,
+            ex_opt_text,
+            ex_sol_text
         ]
         append_to_excel(row_vals, q_diagrams, opt_diagrams,
-                        ans_diagram_paths=ans_diagrams if ans_diagrams else None)
+                        ans_diagram_paths=ans_diagrams if ans_diagrams else None,
+                        ex_diagram_paths=ex_diagrams if ex_diagrams else None)
 
         if i < QUESTIONS_PER_SKILL - 1:
             try:
@@ -1043,17 +1331,35 @@ def run_scraper():
         page.goto(TARGET_URL)
         page.wait_for_selector("div.skill-tree-category", state="attached", timeout=15000)
 
-        category_elements = page.locator("div.skill-tree-category").all()
-        print(f"Found {len(category_elements)} category blocks.")
+        total_categories = page.locator("div.skill-tree-category").count()
+        print(f"Found {total_categories} category blocks.")
 
         serial_tracker = [1]
 
-        for cat_index in range(len(category_elements)):
+        for cat_index in range(total_categories):
+            # Re-fetch count in case DOM changed after navigation
+            current_count = page.locator("div.skill-tree-category").count()
+            if cat_index >= current_count:
+                print(f"  [!] Category index {cat_index} out of range (only {current_count} found). Stopping.")
+                break
+
             cat_block = page.locator("div.skill-tree-category").nth(cat_index)
+
+            # Scroll the category block into view to trigger lazy rendering
+            try:
+                cat_block.scroll_into_view_if_needed()
+                page.wait_for_timeout(300)
+            except Exception:
+                pass
 
             header_loc = cat_block.locator(".skill-tree-skills-header").first
             if not header_loc.is_visible():
-                continue
+                # Try waiting briefly for visibility after scroll
+                try:
+                    header_loc.wait_for(state="visible", timeout=3000)
+                except Exception:
+                    print(f"  [!] Category {cat_index} header not visible after scroll — skipping.")
+                    continue
 
             code_text = (header_loc.locator(".category-code").inner_text().strip()
                          if header_loc.locator(".category-code").count() > 0 else "")
