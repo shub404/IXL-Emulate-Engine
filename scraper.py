@@ -4,21 +4,29 @@ import base64
 import urllib.parse
 from urllib.parse import urljoin
 import requests
-from io import BytesIO
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, Alignment, Border, Side
-from openpyxl.drawing.image import Image as XLImage
-from openpyxl.utils import get_column_letter
 from playwright.sync_api import sync_playwright
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+from concurrent.futures import ThreadPoolExecutor
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 
 BASE_URL = "https://in.ixl.com"
-TARGET_URL = "https://in.ixl.com/maths/class-iii"
+TARGET_URL = "https://www.ixl.com/math/grade-1"
 LOGIN_URL = "https://in.ixl.com/signin"
 EMAIL = "parkerhouston411@kacad"
 PASSWORD = "81party"
 QUESTIONS_PER_SKILL = 3
-EXCEL_FILENAME = "ixl_grade3_questions.xlsx"
+EXCEL_FILENAME = "ixl_grade1_questions(1).xlsx"
 IMAGE_DIR = "ixl_diagrams"
+DRIVE_FOLDER_ID = "14WIlgKnCCcYxtixToqFvx9o2Ej56zfhg"
+SCOPES = ['https://www.googleapis.com/auth/drive']
+CLIENT_SECRET_FILE = "client_secret.json"
+TOKEN_FILE = "token.json"
 
 # Mode 2: set this to the skill URL you want to resume from
 START_URL = "https://www.ixl.com/math/grade-3/division-facts-up-to-12"
@@ -50,16 +58,70 @@ DIAGRAM_SIGNALS = [
     ".fractionTopBlockDiv",
     ".horizontal-scroll-element-wrapper",
     ".horizontal-scroll-hoc-wrapper",
+    "table:has(img[src*='~media'])",
+    ".guide-counting-clickable-image-container",
+    ".standalone-cube-train-wrapper",
+    ".hundredTable",
 ]
 
 Q_SCOPE_PARTS = [
     ".question-and-submission-view .secContent",
 ]
 
-# image dimensions in Excel 
-EXCEL_IMG_MAX_W = 200  
-EXCEL_IMG_MAX_H = 150 
-EXCEL_ROW_HEIGHT_PER_IMG = 115  
+# image dimensions in Excel
+EXCEL_IMG_MAX_W = 200
+EXCEL_IMG_MAX_H = 150
+EXCEL_ROW_HEIGHT_PER_IMG = 115
+
+_drive_service = None
+_drive_executor = ThreadPoolExecutor(max_workers=5)
+
+
+def _init_drive_service():
+    global _drive_service
+    creds = None
+    if os.path.exists(TOKEN_FILE):
+        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_FILE, SCOPES)
+            creds = flow.run_local_server(port=0)
+        with open(TOKEN_FILE, 'w') as token:
+            token.write(creds.to_json())
+    _drive_service = build('drive', 'v3', credentials=creds)
+
+
+def _create_drive_folder(name, parent_id):
+    try:
+        metadata = {
+            'name': name,
+            'mimeType': 'application/vnd.google-apps.folder',
+            'parents': [parent_id]
+        }
+        folder = _drive_service.files().create(body=metadata, fields='id').execute()
+        folder_id = folder['id']
+        return folder_id
+    except Exception as e:
+        print(f"     [!] Drive folder creation failed ({name}): {e}")
+        return None
+
+
+def _upload_file_to_drive_sync(file_path, folder_id):
+    try:
+        metadata = {'name': os.path.basename(file_path), 'parents': [folder_id]}
+        media = MediaFileUpload(file_path, mimetype='image/png')
+        _drive_service.files().create(body=metadata, media_body=media, fields='id').execute()
+    except Exception as e:
+        print(f"     [!] Drive upload failed ({file_path}): {e}")
+
+def _upload_file_to_drive(file_path, folder_id):
+    _drive_executor.submit(_upload_file_to_drive_sync, file_path, folder_id)
+
+
+def _drive_subfolder_url(folder_id):
+    return f"https://drive.google.com/drive/folders/{folder_id}"
 
 
 def setup_dir():
@@ -73,9 +135,8 @@ def init_excel():
     ws = wb.active
     ws.title = "Grade 3 Maths"
     headers = ["#", "Category", "Skill Name", "Question No",
-               "Question Text", "Answer Options", "Correct Answer",
-               "Question Diagrams", "Option Diagrams",
-               "Example Question", "Example Options", "Example Diagram", "Example Solution"]
+               "Question Text", "Question Diagram", "Question Options",
+               "Option Diagrams", "Correct Answer Diagram"]
     header_font = Font(name="Calibri", bold=True, size=11)
 
     for col, label in enumerate(headers, start=1):
@@ -85,185 +146,72 @@ def init_excel():
         cell.border = BORDER
 
     widths = {"A": 6, "B": 30, "C": 45, "D": 12,
-              "E": 70, "F": 35, "G": 30, "H": 30, "I": 30,
-              "J": 70, "K": 35, "L": 30, "M": 70}
+              "E": 70, "F": 50, "G": 35, "H": 50, "I": 50}
     for col, w in widths.items():
         ws.column_dimensions[col].width = w
 
     ws.freeze_panes = "A2"
-    ws.auto_filter.ref = "A1:M1"
+    ws.auto_filter.ref = "A1:I1"
     wb.save(EXCEL_FILENAME)
 
 
-def _scale_image_for_excel(img_path):
-    """
-    Load a PNG, scale it to fit within EXCEL_IMG_MAX_W x EXCEL_IMG_MAX_H
-    preserving aspect ratio, return an openpyxl Image object.
-    """
-    from PIL import Image as PILImage
-    with PILImage.open(img_path) as pil_img:
-        orig_w, orig_h = pil_img.size
-        scale = min(EXCEL_IMG_MAX_W / orig_w, EXCEL_IMG_MAX_H / orig_h, 1.0)
-        new_w = int(orig_w * scale)
-        new_h = int(orig_h * scale)
-        resized = pil_img.resize((new_w, new_h), PILImage.LANCZOS)
-        buf = BytesIO()
-        resized.save(buf, format="PNG")
-        buf.seek(0)
-    xl_img = XLImage(buf)
-    xl_img.width  = new_w
-    xl_img.height = new_h
-    return xl_img
-
-
-def append_to_excel(row_data, q_diagram_paths, opt_diagram_paths, ans_diagram_paths=None, ex_diagram_paths=None):
-    """
-    Writes a data row and embeds diagram images directly into columns H, I, and L.
-    row_data must have 10 values for columns A-G, J, K, M.
-    If ans_diagram_paths is provided, col G gets images (vertically) instead of text.
-    """
+def append_to_excel(row_data, q_diagram_url, opt_diagram_url, ans_diagram_url=None):
     try:
         wb = load_workbook(EXCEL_FILENAME)
         ws = wb.active
         current_row = ws.max_row + 1
         cell_font = Font(name="Calibri", size=11)
 
+        def _clean_str(s):
+            if s is None: return ""
+            return ILLEGAL_CHARACTERS_RE.sub('', str(s))
+
+        def _get_val_link(text, url=None):
+            c_text = _clean_str(text)
+            c_url = _clean_str(url) if url else None
+            if c_url and not c_text:
+                return c_url, c_url
+            elif c_url and c_text:
+                return f"{c_text}\n{c_url}", c_url
+            return c_text, None
+
         text_columns = {
-            1: row_data[0], 2: row_data[1], 3: row_data[2], 4: row_data[3],
-            5: row_data[4], 6: row_data[5], 7: row_data[6],
-            10: row_data[7], 11: row_data[8], 13: row_data[9]
+            1: (_clean_str(row_data[0]), None),
+            2: (_clean_str(row_data[1]), None),
+            3: (_clean_str(row_data[2]), None),
+            4: (_clean_str(row_data[3]), None),
+            5: (_clean_str(row_data[4]), None),
+            6: (_clean_str(q_diagram_url), _clean_str(q_diagram_url) if q_diagram_url else None),
+            7: (_clean_str(row_data[5]), None),
+            8: (_clean_str(opt_diagram_url), _clean_str(opt_diagram_url) if opt_diagram_url else None),
+            9: _get_val_link(row_data[6], ans_diagram_url)
         }
 
-        # ── write text columns ─────────
-        for col_idx, value in text_columns.items():
-            if col_idx == 7 and ans_diagram_paths:
-                # Col G will hold images instead — write border/alignment only
-                cell = ws.cell(row=current_row, column=col_idx)
-                cell.border = BORDER
-                cell.alignment = Alignment(vertical="top")
-                continue
+        for col_idx, (value, h_link) in text_columns.items():
             cell = ws.cell(row=current_row, column=col_idx, value=value)
-            cell.font = cell_font
+            if h_link and h_link.startswith("http"):
+                cell.hyperlink = h_link
+                cell.font = Font(name="Calibri", size=11, color="0563C1", underline="single")
+            else:
+                cell.font = cell_font
             cell.border = BORDER
             if col_idx in [1, 4]:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
             else:
                 cell.alignment = Alignment(vertical="top", wrap_text=True)
 
-        # image columns get borders even if no images
-        for col_idx in [8, 9, 12]:
-            cell = ws.cell(row=current_row, column=col_idx)
-            cell.border = BORDER
-            cell.alignment = Alignment(vertical="top")
-
-        # embed question diagrams into column H
-        h_col_letter = get_column_letter(8)
-        q_img_count = 0
-        for img_path in q_diagram_paths:
-            if not os.path.exists(img_path):
-                continue
-            try:
-                xl_img = _scale_image_for_excel(img_path)
-                anchor_row = current_row + q_img_count
-                cell_ref = f"{h_col_letter}{anchor_row}"
-                ws.add_image(xl_img, cell_ref)
-
-                ws.cell(row=anchor_row, column=8).border = BORDER
-                ws.cell(row=anchor_row, column=8).alignment = Alignment(vertical="top")
-                ws.row_dimensions[anchor_row].height = max(
-                    ws.row_dimensions[anchor_row].height or 0,
-                    xl_img.height * 0.75 + 6
-                )
-                q_img_count += 1
-            except Exception as e:
-                print(f"     [!] Could not embed image {img_path}: {e}")
-
-        # embed answer diagrams vertically in column G
-        if ans_diagram_paths:
-            g_col_letter = get_column_letter(7)
-            ans_img_count = 0
-            for img_path in ans_diagram_paths:
-                if not os.path.exists(img_path):
-                    continue
-                try:
-                    xl_img = _scale_image_for_excel(img_path)
-                    anchor_row = current_row + ans_img_count
-                    ws.add_image(xl_img, f"{g_col_letter}{anchor_row}")
-                    cell = ws.cell(row=anchor_row, column=7)
-                    cell.border = BORDER
-                    cell.alignment = Alignment(vertical="top")
-                    ws.row_dimensions[anchor_row].height = max(
-                        ws.row_dimensions[anchor_row].height or 0,
-                        xl_img.height * 0.75 + 6
-                    )
-                    ans_img_count += 1
-                except Exception as e:
-                    print(f"     [!] Could not embed answer image {img_path}: {e}")
-
-        # embed option diagrams vertically in column I
-        i_col_letter = get_column_letter(9)
-        opt_img_count = 0
-        for img_path in opt_diagram_paths:
-            if not os.path.exists(img_path):
-                continue
-            try:
-                xl_img = _scale_image_for_excel(img_path)
-                anchor_row = current_row + opt_img_count
-                ws.add_image(xl_img, f"{i_col_letter}{anchor_row}")
-                cell = ws.cell(row=anchor_row, column=9)
-                cell.border = BORDER
-                cell.alignment = Alignment(vertical="top")
-                ws.row_dimensions[anchor_row].height = max(
-                    ws.row_dimensions[anchor_row].height or 0,
-                    xl_img.height * 0.75 + 6
-                )
-                opt_img_count += 1
-            except Exception as e:
-                print(f"     [!] Could not embed option image {img_path}: {e}")
-
-        # embed example diagrams vertically in column L
-        if ex_diagram_paths:
-            ex_col_letter = get_column_letter(12)
-            ex_img_count = 0
-            for img_path in ex_diagram_paths:
-                if not os.path.exists(img_path):
-                    continue
-                try:
-                    xl_img = _scale_image_for_excel(img_path)
-                    anchor_row = current_row + ex_img_count
-                    ws.add_image(xl_img, f"{ex_col_letter}{anchor_row}")
-                    cell = ws.cell(row=anchor_row, column=12)
-                    cell.border = BORDER
-                    cell.alignment = Alignment(vertical="top")
-                    ws.row_dimensions[anchor_row].height = max(
-                        ws.row_dimensions[anchor_row].height or 0,
-                        xl_img.height * 0.75 + 6
-                    )
-                    ex_img_count += 1
-                except Exception as e:
-                    print(f"     [!] Could not embed example image {img_path}: {e}")
-
-        # ensure the base row is visible even if there are no images
         if not ws.row_dimensions[current_row].height:
             ws.row_dimensions[current_row].height = 40
 
         wb.save(EXCEL_FILENAME)
+        print(f"       [Excel] Successfully saved Q{row_data[3]} to {EXCEL_FILENAME}")
 
     except PermissionError:
         print(f"\n[!] Close {EXCEL_FILENAME} in Excel immediately.")
         input("Press ENTER here once closed to resume saving data...")
-        wb = load_workbook(EXCEL_FILENAME)
-        ws = wb.active
-        current_row = ws.max_row + 1
-        
-        text_columns = {
-            1: row_data[0], 2: row_data[1], 3: row_data[2], 4: row_data[3],
-            5: row_data[4], 6: row_data[5], 7: row_data[6],
-            10: row_data[7], 11: row_data[8], 13: row_data[9]
-        }
-        for col_idx, value in text_columns.items():
-            ws.cell(row=current_row, column=col_idx, value=value)
-        wb.save(EXCEL_FILENAME)
+        append_to_excel(row_data, q_diagram_url, opt_diagram_url, ans_diagram_url)
+    except Exception as e:
+        print(f"       [!] Failed to append to Excel: {e}")
 
 # jscode to extract text from the question view
 _MATH_WALKER_JS = """
@@ -272,8 +220,18 @@ _MATH_WALKER_JS = """
         'pie-chart', 'multiplication-model-container', 'guide-counting-qm',
         'vector-image-wrapper', 'parking-lot', 'old-table', 'binsContainer', 'qTabularGrid', 'table',
         'gc-cut-shapes', 'shape', 'fractionTopBlockDiv', 'SelectableTile', 'TileMultipleChoices',
-        'ddItemBankDropSlot', 'answer-box'
+        'ddItemBankDropSlot', 'answer-box', 'react-gc-number-button-grid', 'buttonShape',
+        'canvas-container-div'
     ];
+    const isDiagramTableOrElement = (el) => {
+        if (!el.classList) return false;
+        if (_DIAGRAM_CLASSES.some(c => el.classList.contains(c))) return true;
+        if (el.classList.contains('hundredTable') || el.classList.contains('flowerTable')) return true;
+        if (el.tagName.toLowerCase() === 'table' && el.querySelector('img[src*="~media"]')) return true;
+        if (el.tagName.toLowerCase() === 'canvas') return true;
+        if (el.getAttribute('role') === 'figure') return true;
+        return false;
+    };
     let out = '';
     const walk = (node) => {
         for (const child of node.childNodes) {
@@ -350,7 +308,7 @@ _MATH_WALKER_JS = """
                     }
                     if (operands.length > 0) {
                         const op = operator || '+';
-                        
+
                         let eq = operands.join(' ' + op + ' ');
                         if (answerBlanks > 0) {
                             eq += ' = ' + Array(answerBlanks).fill('_').join(' ');
@@ -392,7 +350,7 @@ _MATH_WALKER_JS = """
                         if (entries.length >= 3) out += ' = ' + entries[2];
                     }
                 // --- NOW skip diagram containers (after all math checks) ---
-                } else if (child.classList && _DIAGRAM_CLASSES.some(c => child.classList.contains(c))) {
+                } else if (isDiagramTableOrElement(child)) {
                     continue;
                 } else {
                     walk(child);
@@ -443,14 +401,14 @@ def _normalize_math_text(text):
     if not text:
         return text
     # Replace Unicode multiplication signs with 'x'
-    text = text.replace('\u00d7', ' x ')   # ×
-    text = text.replace('\u00b7', ' x ')   # ·  (middle dot often used for mult)
-    text = text.replace('\u22c5', ' x ')   # ⋅
+    text = text.replace('×', ' x ')   # ×
+    text = text.replace('·', ' x ')   # ·  (middle dot often used for mult)
+    text = text.replace('⋅', ' x ')   # ⋅
     # Replace Unicode minus/dash with '-'
-    text = text.replace('\u2013', '-')      # –  en-dash
-    text = text.replace('\u2212', '-')      # −  minus sign
+    text = text.replace('–', '-')      # –  en-dash
+    text = text.replace('−', '-')      # −  minus sign
     # Replace Unicode division sign with '/'
-    text = text.replace('\u00f7', '/')      # ÷
+    text = text.replace('÷', '/')      # ÷
     # Collapse multiple spaces
     text = ' '.join(text.split())
     return text
@@ -507,7 +465,7 @@ def extract_question_text(page, root_locator=None):
             page.locator(".question-and-submission-view .ixl-practice-crate").first,
             page.locator(".ixl-practice-crate").first
         ]
-        
+
     for sel_loc in scopes:
         if sel_loc.count() > 0:
             try:
@@ -561,7 +519,7 @@ def extract_question_text(page, root_locator=None):
 
 def extract_options(page, root_locator=None):
     options = []
-    
+
     if root_locator is not None:
         tiles = root_locator.locator(".SelectableTile").all()
     else:
@@ -569,7 +527,7 @@ def extract_options(page, root_locator=None):
             ".question-and-submission-view .SelectableTile, "
             ".ixl-practice-crate .SelectableTile"
         ).all()
-        
+
     _walker_js = f"el => {{ {_MATH_WALKER_JS} walk(el); return out.trim(); }}"
     for tile in tiles:
         try:
@@ -583,10 +541,12 @@ def extract_options(page, root_locator=None):
                 label = tile.get_attribute("aria-label") or tile.inner_text() or ""
             if label and label.strip():
                 clean_label = " ".join(label.replace("\n", " ").split())
+                if clean_label.lower().rstrip(",.!") in ("options", "option"):
+                    continue
                 options.append(clean_label)
         except Exception:
             continue
-            
+
     # Drag-and-drop questions: options are draggable tiles in .parking-lot
     if not options:
         if root_locator is not None:
@@ -602,9 +562,10 @@ def extract_options(page, root_locator=None):
                     label = tile.evaluate(_walker_js) or ""
                 except Exception:
                     label = tile.inner_text()
-                label = " ".join(label.replace("\n", " ").split())
-                if label and label.strip():
-                    options.append(label.strip())
+                clean_label = " ".join(label.replace("\n", " ").split())
+                if clean_label.lower().rstrip(",.!") in ("options", "option"):
+                    continue
+                options.append(clean_label)
             except Exception:
                 continue
 
@@ -622,9 +583,10 @@ def extract_options(page, root_locator=None):
                 content = slot.locator(".itemContent").first
                 target = content if content.count() > 0 else slot
                 label = target.evaluate(_walker_js) or ""
-                label = " ".join(label.replace("\n", " ").split())
-                if label:
-                    options.append(label.strip())
+                clean_label = " ".join(label.replace("\n", " ").split())
+                if clean_label.lower().rstrip(",.!") in ("options", "option"):
+                    continue
+                options.append(clean_label)
             except Exception:
                 continue
 
@@ -637,6 +599,21 @@ def extract_options(page, root_locator=None):
 
 
 def extract_correct_answer(page):
+    try:
+        if page.locator(".react-gc-number-button-grid").count() > 0:
+            containers = page.locator(".react-gc-number-button-grid .number-button-container").all()
+            for container in containers:
+                try:
+                    title_el = container.locator("svg title").first
+                    if title_el.count() > 0:
+                        if title_el.text_content().strip().lower() == "selected number button":
+                            val = container.inner_text().strip()
+                            if val: return val
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
     answer = ""
     box = page.locator(".answer-box .correct-answer").first
     if box.count() == 0:
@@ -740,7 +717,7 @@ def _boxes_overlap(a, b, threshold=0.70):
     return (inter_area / b_area) >= threshold
 
 
-def _wait_for_element_painted(element, retries=6, delay_ms=300):
+def _wait_for_element_painted(element, retries=18, delay_ms=50):
     for _ in range(retries):
         bb = _safe_bbox(element)
         if bb and bb["width"] > 1 and bb["height"] > 1:
@@ -802,6 +779,14 @@ def extract_diagrams_screenshots(page, question_index, skill_name):
     slug = skill_name.replace(" ", "_")[:40]
     ts = int(time.time())
 
+    q_folder_name = f"{slug}_q{question_index + 1}_qdiag_{ts}"
+    opt_folder_name = f"{slug}_q{question_index + 1}_optdiag_{ts}"
+    q_folder_path = os.path.join(IMAGE_DIR, q_folder_name)
+    opt_folder_path = os.path.join(IMAGE_DIR, opt_folder_name)
+
+    q_folder_id = None
+    opt_folder_id = None
+
     # Find active question container to avoid duplicate phantom elements
     _q_candidates = []
     _seen_q_coords = set()
@@ -843,6 +828,8 @@ def extract_diagrams_screenshots(page, question_index, skill_name):
                 pass
 
         if has_diagram:
+            os.makedirs(q_folder_path, exist_ok=True)
+            q_folder_id = _create_drive_folder(q_folder_name, DRIVE_FOLDER_ID)
             q_paths = _extract_from_scope(
                 page=page,
                 scope_parts=Q_SCOPE_PARTS,
@@ -850,6 +837,8 @@ def extract_diagrams_screenshots(page, question_index, skill_name):
                 scope_label="Q",
                 prefix=f"{slug}_q{question_index + 1}",
                 ts=ts,
+                save_dir=q_folder_path,
+                drive_folder_id=q_folder_id,
             )
 
         # Process option tiles inside the active question
@@ -861,11 +850,26 @@ def extract_diagrams_screenshots(page, question_index, skill_name):
             if not _tile_has_diagram(tile):
                 continue
 
-            bb = _wait_for_element_painted(tile)
+            target_el = tile
+            try:
+                if tile.locator(".standalone-cube-train-wrapper .horizontal-cell").count() > 0:
+                    target_el = tile.locator(".standalone-cube-train-wrapper .horizontal-cell").first
+                elif tile.locator(".horizontal-cell").count() > 0:
+                    target_el = tile.locator(".horizontal-cell").first
+                elif tile.locator(".vector-image").count() > 0:
+                    target_el = tile.locator(".vector-image").first
+            except Exception:
+                pass
+
+            bb = _wait_for_element_painted(target_el)
             if bb and bb["width"] > 2 and bb["height"] > 2:
                 idx = len(opt_paths) + 1
-                path = os.path.join(IMAGE_DIR, f"{slug}_q{question_index + 1}_opt{idx}_{ts}.png")
-                if _screenshot_element(tile, path):
+                os.makedirs(opt_folder_path, exist_ok=True)
+                if opt_folder_id is None:
+                    opt_folder_id = _create_drive_folder(opt_folder_name, DRIVE_FOLDER_ID)
+                path = os.path.join(opt_folder_path, f"{slug}_q{question_index + 1}_opt{idx}_{ts}.png")
+                if _screenshot_element(target_el, path):
+                    _upload_file_to_drive(path, opt_folder_id)
                     opt_paths.append(path)
                     print(f"       [Opt{idx}] SAVED tile screenshot: {path}")
 
@@ -901,7 +905,7 @@ def extract_diagrams_screenshots(page, question_index, skill_name):
         last_bin = _active_container.locator(".bin.last").first
         if last_bin.count() > 0:
             bins_to_screenshot.append(last_bin)
-        
+
         if not bins_to_screenshot:
             bins_to_screenshot = _active_container.locator(".bin").all()
 
@@ -910,16 +914,24 @@ def extract_diagrams_screenshots(page, question_index, skill_name):
                 bb = _wait_for_element_painted(bin_el)
                 if bb is None or bb["width"] < 2 or bb["height"] < 2:
                     continue
-                path = os.path.join(IMAGE_DIR,
+                os.makedirs(opt_folder_path, exist_ok=True)
+                if opt_folder_id is None:
+                    opt_folder_id = _create_drive_folder(opt_folder_name, DRIVE_FOLDER_ID)
+                path = os.path.join(opt_folder_path,
                                     f"{slug}_q{question_index + 1}_bin{b_idx + 1}_{ts}.png")
                 if _screenshot_element(bin_el, path):
+                    _upload_file_to_drive(path, opt_folder_id)
                     opt_paths.append(path)
                     print(f"       [Bin{b_idx + 1}] SAVED bin screenshot: {path}")
             except Exception as e:
                 print(f"     [!] bin screenshot failed: {e}")
 
-    return q_paths, opt_paths
-def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts):
+    q_url = _drive_subfolder_url(q_folder_id) if q_folder_id else ""
+    opt_url = _drive_subfolder_url(opt_folder_id) if opt_folder_id else ""
+    return q_url, opt_url
+
+def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts, save_dir=None, drive_folder_id=None):
+    target_dir = save_dir if save_dir is not None else IMAGE_DIR
     paths      = []
     seen_boxes = []
 
@@ -930,6 +942,19 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
         return False
 
     def do_screenshot(element, tag, layer="?", signal="?"):
+        try:
+            if element.locator(".standalone-cube-train-wrapper .horizontal-cell").count() > 0:
+                element = element.locator(".standalone-cube-train-wrapper .horizontal-cell").first
+            elif "standalone-cube-train-wrapper" in (element.get_attribute("class") or ""):
+                if element.locator(".horizontal-cell").count() > 0:
+                    element = element.locator(".horizontal-cell").first
+            elif element.locator(".horizontal-cell").count() > 0:
+                element = element.locator(".horizontal-cell").first
+            elif element.locator(".vector-image").count() > 0:
+                element = element.locator(".vector-image").first
+        except Exception:
+            pass
+
         bb = _wait_for_element_painted(element)
         if _is_too_small(bb):
             print(f"       [{scope_label}] DROP-small  layer={layer} sig={signal} bb={bb}")
@@ -948,10 +973,12 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
         except Exception as e:
             meta = {"tag": "?", "cls": f"<eval failed: {e}>", "role": "?", "al": "?"}
         idx  = len(paths) + 1
-        path = os.path.join(IMAGE_DIR, f"{prefix}_{tag}_{ts}_{idx}.png")
+        path = os.path.join(target_dir, f"{prefix}_{tag}_{ts}_{idx}.png")
         if _screenshot_element(element, path):
             paths.append(path)
             seen_boxes.append(bb)
+            if drive_folder_id:
+                _upload_file_to_drive(path, drive_folder_id)
             print(f"       [{scope_label}] SAVED#{idx} layer={layer} sig={signal} "
                   f"tag={meta.get('tag')} cls={meta.get('cls')} role={meta.get('role')} "
                   f"al={meta.get('al')} "
@@ -1015,10 +1042,13 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
         '[role="figure"]',
         ".shape",
         ".vector-image-wrapper",
+        ".standalone-cube-train-wrapper",
+        ".hundredTable",
+        "table:has(img[src*='~media'])",
     ]
     # These can have multiple real instances per question (e.g. two number lines for
     # equivalence questions, or a standalone pie chart) — no phantom de-dupe applied.
-    L1_MULTI      = [".graphingBaseContainer", ".pie-chart", ".qPVTable"]
+    L1_MULTI      = [".graphingBaseContainer", ".pie-chart", ".qPVTable", ".guide-counting-clickable-image-container"]
     L1_REPEATING  = [".guide-counting-qm"]
 
     for container_sel in L1_INTEGRATED + L1_MULTI + L1_REPEATING:
@@ -1051,12 +1081,23 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
 # After submission, screenshot regular diagrams in the answer box and each bin (with placed tiles) as the correct answer.
 def _screenshot_answer_diagrams(page, question_index, skill_name, ts):
     slug = skill_name.replace(" ", "_")[:40]
+    ans_folder_name = f"{slug}_q{question_index + 1}_ansdiag_{ts}"
+    ans_folder_path = os.path.join(IMAGE_DIR, ans_folder_name)
+    ans_folder_id = None
     paths = []
 
     # 1. Extract regular diagrams inside the answer box
     try:
         answer_box = page.locator(".answer-box").first
         if answer_box.count() > 0 and answer_box.is_visible():
+            tiles = answer_box.locator(".SelectableTile")
+            if tiles.count() > 0:
+                selected_tile = answer_box.locator(".SelectableTile.selected")
+                if selected_tile.count() > 0:
+                    answer_box = selected_tile.first
+                else:
+                    answer_box = tiles.first
+
             has_diagram = False
             for signal in DIAGRAM_SIGNALS:
                 try:
@@ -1067,13 +1108,17 @@ def _screenshot_answer_diagrams(page, question_index, skill_name, ts):
                     pass
 
             if has_diagram:
+                os.makedirs(ans_folder_path, exist_ok=True)
+                ans_folder_id = _create_drive_folder(ans_folder_name, DRIVE_FOLDER_ID)
                 ans_diag_paths = _extract_from_scope(
                     page=page,
-                    scope_parts=[], 
+                    scope_parts=[],
                     root_locator=answer_box,
                     scope_label="Ans",
                     prefix=f"{slug}_q{question_index + 1}_ans",
                     ts=ts,
+                    save_dir=ans_folder_path,
+                    drive_folder_id=ans_folder_id,
                 )
                 paths.extend(ans_diag_paths)
     except Exception as e:
@@ -1119,7 +1164,7 @@ def _screenshot_answer_diagrams(page, question_index, skill_name, ts):
             last_bin = container.locator(".bin.last").first
             if last_bin.count() > 0:
                 bins_to_screenshot.append(last_bin)
-            
+
             if not bins_to_screenshot:
                 bins_to_screenshot = container.locator(".bin").all()
 
@@ -1127,15 +1172,19 @@ def _screenshot_answer_diagrams(page, question_index, skill_name, ts):
                 bb = _wait_for_element_painted(bin_el)
                 if bb is None or bb["width"] < 2 or bb["height"] < 2:
                     continue
-                path = os.path.join(IMAGE_DIR,
+                os.makedirs(ans_folder_path, exist_ok=True)
+                if ans_folder_id is None:
+                    ans_folder_id = _create_drive_folder(ans_folder_name, DRIVE_FOLDER_ID)
+                path = os.path.join(ans_folder_path,
                                     f"{slug}_q{question_index + 1}_ans_bin{b_idx + 1}_{ts}.png")
                 if _screenshot_element(bin_el, path):
+                    _upload_file_to_drive(path, ans_folder_id)
                     paths.append(path)
                     print(f"       [AnsBin{b_idx + 1}] SAVED answer bin: {path}")
     except Exception as e:
         print(f"     [!] answer bin screenshot failed: {e}")
-        
-    return paths
+
+    return _drive_subfolder_url(ans_folder_id) if ans_folder_id else ""
 
 
 def extract_and_advance(page, category_name, skill_name, serial_tracker):
@@ -1168,53 +1217,6 @@ def extract_and_advance(page, category_name, skill_name, serial_tracker):
         if not question_text:
             print(f"     [!] WARNING: empty question text on Q{i+1}")
 
-        ex_q_text = ""
-        ex_opt_text = ""
-        ex_sol_text = ""
-        ex_diagrams = []
-
-        if i == 0:
-            try:
-                example_btn = page.locator(".see-example button, button.border-button:has-text('Learn with an example')").first
-                if example_btn.count() > 0 and example_btn.is_visible():
-                    example_btn.click()
-                    page.wait_for_selector(".ixl-practice-crate.disabled-question", state="visible", timeout=5000)
-                    page.wait_for_timeout(1000)
-                    
-                    ex_q_container = page.locator(".ixl-practice-crate.disabled-question").first
-                    ex_q_text = extract_question_text(page, root_locator=ex_q_container)
-                    ex_opt_text = extract_options(page, root_locator=ex_q_container)
-
-                    ex_sol_container = page.locator(".tab-box, .exp-solve").first
-                    if ex_sol_container.count() > 0:
-                        js_sol = f"el => {{ {_MATH_WALKER_JS} walk(el); return out.trim(); }}"
-                        try:
-                            sol_val = ex_sol_container.evaluate(js_sol)
-                            if sol_val:
-                                ex_sol_text = " ".join(sol_val.replace("\n", " ").split())
-                        except Exception as e:
-                            print(f"     [!] Example solution text extraction failed: {e}")
-                            
-                        ts_ex = int(time.time())
-                        ex_diagrams = _extract_from_scope(
-                            page=page,
-                            scope_parts=[],
-                            root_locator=ex_sol_container,
-                            scope_label="ExSol",
-                            prefix=f"{skill_name.replace(' ', '_')[:40]}_ex",
-                            ts=ts_ex
-                        )
-                        
-                    back_btn = page.locator(".back-to-practice button, button:has-text('Back to practice')").first
-                    if back_btn.count() > 0 and back_btn.is_visible():
-                        back_btn.click()
-                        page.wait_for_timeout(1000)
-                    else:
-                        print("     [!] Back to practice button not found. Attempting to click toggle again.")
-                        example_btn.click()
-                        page.wait_for_timeout(1000)
-            except Exception as e:
-                print(f"     [!] Example processing failed: {e}")
 
         correct_answer = ""
         try:
@@ -1224,7 +1226,7 @@ def extract_and_advance(page, category_name, skill_name, serial_tracker):
             ).first
             submit_btn.wait_for(state="visible", timeout=10000)
             submit_btn.click()
-            
+
             # Pop-up Submit button - for incomplete answers
             popup_btn = page.locator(
                 'button[data-cy="incomplete-answer-popover-submit-button"]'
@@ -1241,7 +1243,7 @@ def extract_and_advance(page, category_name, skill_name, serial_tracker):
         ts_ans = int(time.time())
         ans_diagrams = _screenshot_answer_diagrams(page, i, skill_name, ts_ans)
 
-        # row_data = columns A-G, J, K, M (10 values)
+        # row_data = columns A-E, G, I (7 values)
         row_vals = [
             serial_tracker[0] if i == 0 else "",
             category_name     if i == 0 else "",
@@ -1249,14 +1251,9 @@ def extract_and_advance(page, category_name, skill_name, serial_tracker):
             i + 1,
             question_text,
             options_text,
-            correct_answer,
-            ex_q_text,
-            ex_opt_text,
-            ex_sol_text
+            correct_answer
         ]
-        append_to_excel(row_vals, q_diagrams, opt_diagrams,
-                        ans_diagram_paths=ans_diagrams if ans_diagrams else None,
-                        ex_diagram_paths=ex_diagrams if ex_diagrams else None)
+        append_to_excel(row_vals, q_diagrams, opt_diagrams, ans_diagram_url=ans_diagrams)
 
         if i < QUESTIONS_PER_SKILL - 1:
             try:
@@ -1306,6 +1303,7 @@ def run_scraper():
         start_path    = None
         reached_start = True  # Mode 1: start immediately
 
+    _init_drive_service()
     setup_dir()
     init_excel()
 
@@ -1320,7 +1318,7 @@ def run_scraper():
 
         print("Authenticating...")
         page.goto(LOGIN_URL)
-        
+
         # Fill in credentials
         page.fill("input[type='email'], input[name='username']", EMAIL)
         page.fill("input[type='password'], input[name='password']", PASSWORD)
@@ -1393,16 +1391,16 @@ def run_scraper():
 
                 current_skill.scroll_into_view_if_needed()
                 current_skill.click()
-                
+
                 # This runs 3 times
                 extract_and_advance(page, full_category_name, skill_name, serial_tracker)
 
                 print("  -> Retreating to main directory...")
                 try:
                     breadcrumb = page.locator(
-                        'a.breadcrumb-link:has-text("Third grade"), '
-                        'a.breadcrumb-link[href="/math/grade-3"], '
-                        'a.breadcrumb-link[href="/maths/class-iii"]'
+                        'a.breadcrumb-link:has-text("First grade"), '
+                        'a.breadcrumb-link[href="/math/grade-1"], '
+                        'a.breadcrumb-link[href="/maths/class-i"]'
                     ).first
                     breadcrumb.wait_for(state="visible", timeout=10000)
                     breadcrumb.click()
