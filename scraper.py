@@ -14,6 +14,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from concurrent.futures import ThreadPoolExecutor
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+import threading
 
 BASE_URL = "https://in.ixl.com"
 TARGET_URL = "https://www.ixl.com/math/grade-1"
@@ -108,11 +109,20 @@ def _create_drive_folder(name, parent_id):
         return None
 
 
+_thread_local = threading.local()
+
+def _get_thread_drive_service():
+    if not hasattr(_thread_local, 'service'):
+        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+        _thread_local.service = build('drive', 'v3', credentials=creds)
+    return _thread_local.service
+
 def _upload_file_to_drive_sync(file_path, folder_id):
     try:
+        service = _get_thread_drive_service()
         metadata = {'name': os.path.basename(file_path), 'parents': [folder_id]}
         media = MediaFileUpload(file_path, mimetype='image/png')
-        _drive_service.files().create(body=metadata, media_body=media, fields='id').execute()
+        service.files().create(body=metadata, media_body=media, fields='id').execute()
     except Exception as e:
         print(f"     [!] Drive upload failed ({file_path}): {e}")
 
