@@ -4,6 +4,7 @@ import base64
 import urllib.parse
 from urllib.parse import urljoin
 import requests
+import re
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, Alignment, Border, Side
 from playwright.sync_api import sync_playwright
@@ -17,21 +18,20 @@ from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 import threading
 
 BASE_URL = "https://in.ixl.com"
-TARGET_URL = "https://www.ixl.com/math/grade-1"
+TARGET_URL = "https://www.ixl.com/math/grade-3"
 LOGIN_URL = "https://in.ixl.com/signin"
 EMAIL = "parkerhouston411@kacad"
 PASSWORD = "81party"
 QUESTIONS_PER_SKILL = 3
-EXCEL_FILENAME = "ixl_grade1_questions(1).xlsx"
+EXCEL_FILENAME = "ixl_grade3_questions.xlsx"
 IMAGE_DIR = "ixl_diagrams"
-DRIVE_FOLDER_ID = "14WIlgKnCCcYxtixToqFvx9o2Ej56zfhg"
+DRIVE_FOLDER_ID = "1ffreALNKiFdOO2dT6Qmunp-vXvO-u3Nm"
 SCOPES = ['https://www.googleapis.com/auth/drive']
 CLIENT_SECRET_FILE = "client_secret.json"
 TOKEN_FILE = "token.json"
 
 # Mode 2: set this to the skill URL you want to resume from
-START_URL = "https://www.ixl.com/math/grade-3/division-facts-up-to-12"
-
+START_URL = "https://www.ixl.com/math/grade-1/giving-to-charity"
 THIN = Side(style="thin", color="D9D9D9")
 BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
@@ -63,6 +63,25 @@ DIAGRAM_SIGNALS = [
     ".guide-counting-clickable-image-container",
     ".standalone-cube-train-wrapper",
     ".hundredTable",
+    # New signals
+    ".train-and-item-group",
+    ".train-and-element-group",
+    ".measurementRegion",
+    ".calendar-container",
+    ".diagramLabelContainer",
+    ".QMMeasurable",
+    "[class*='tenFrames']",
+    "[class*='series-of-components']",
+    "[class*='qTable']",
+    "[class*='pvmContainer']", 
+    "[class*='clockContainer']",
+    "[class*='currencyCoinDiv']",
+    "[class*='horizontal-scroll']",
+    "[class*='dragAndDropContainer']",
+    "[class*='story-book']",
+    "[class*='static-cube-train']",
+    "[class*='SelectableTime']",
+    ".simple-item-table"
 ]
 
 Q_SCOPE_PARTS = [
@@ -146,7 +165,7 @@ def init_excel():
     ws.title = "Grade 3 Maths"
     headers = ["#", "Category", "Skill Name", "Question No",
                "Question Text", "Question Diagram", "Question Options",
-               "Option Diagrams", "Correct Answer Diagram"]
+               "Option Diagrams", "Correct Answer", "Answer Diagram"]
     header_font = Font(name="Calibri", bold=True, size=11)
 
     for col, label in enumerate(headers, start=1):
@@ -156,12 +175,12 @@ def init_excel():
         cell.border = BORDER
 
     widths = {"A": 6, "B": 30, "C": 45, "D": 12,
-              "E": 70, "F": 50, "G": 35, "H": 50, "I": 50}
+              "E": 70, "F": 50, "G": 35, "H": 50, "I": 35, "J": 55}
     for col, w in widths.items():
         ws.column_dimensions[col].width = w
 
     ws.freeze_panes = "A2"
-    ws.auto_filter.ref = "A1:I1"
+    ws.auto_filter.ref = "A1:J1"
     wb.save(EXCEL_FILENAME)
 
 
@@ -176,15 +195,6 @@ def append_to_excel(row_data, q_diagram_url, opt_diagram_url, ans_diagram_url=No
             if s is None: return ""
             return ILLEGAL_CHARACTERS_RE.sub('', str(s))
 
-        def _get_val_link(text, url=None):
-            c_text = _clean_str(text)
-            c_url = _clean_str(url) if url else None
-            if c_url and not c_text:
-                return c_url, c_url
-            elif c_url and c_text:
-                return f"{c_text}\n{c_url}", c_url
-            return c_text, None
-
         text_columns = {
             1: (_clean_str(row_data[0]), None),
             2: (_clean_str(row_data[1]), None),
@@ -194,7 +204,11 @@ def append_to_excel(row_data, q_diagram_url, opt_diagram_url, ans_diagram_url=No
             6: (_clean_str(q_diagram_url), _clean_str(q_diagram_url) if q_diagram_url else None),
             7: (_clean_str(row_data[5]), None),
             8: (_clean_str(opt_diagram_url), _clean_str(opt_diagram_url) if opt_diagram_url else None),
-            9: _get_val_link(row_data[6], ans_diagram_url)
+            # Col I: plain correct-answer text (never hyperlinked)
+            9: (_clean_str(row_data[6]), None),
+            # Col J: Drive URL for answer diagram, hyperlinked (empty if no diagram)
+            10: (_clean_str(ans_diagram_url) if ans_diagram_url else "",
+                 _clean_str(ans_diagram_url) if ans_diagram_url else None),
         }
 
         for col_idx, (value, h_link) in text_columns.items():
@@ -231,11 +245,15 @@ _MATH_WALKER_JS = """
         'vector-image-wrapper', 'parking-lot', 'old-table', 'binsContainer', 'qTabularGrid', 'table',
         'gc-cut-shapes', 'shape', 'fractionTopBlockDiv', 'SelectableTile', 'TileMultipleChoices',
         'ddItemBankDropSlot', 'answer-box', 'react-gc-number-button-grid', 'buttonShape',
-        'canvas-container-div'
+        'canvas-container-div', 'tenFrames-single', 'static-cube-train',
+        'simple-item-table', 'expression-tile-bank', 'expression-tile-parking-space', 'expression-tile',
+        'train-and-item-group', 'train-and-element-group', 'measurementRegion',
+        'calendar-container', 'diagramLabelContainer', 'QMMeasurable'
     ];
     const isDiagramTableOrElement = (el) => {
         if (!el.classList) return false;
         if (_DIAGRAM_CLASSES.some(c => el.classList.contains(c))) return true;
+        if (Array.from(el.classList).some(c => c.includes('series-of-components') || c.includes('story-book') || c.includes('qTable') || c.includes('pvmContainer') || c.includes('clockContainer') || c.includes('currencyCoinDiv') || c.includes('horizontal-scroll') || c.includes('dragAndDropContainer') || c.includes('SelectableTime') || c.includes('static-cube-train'))) return true;
         if (el.classList.contains('hundredTable') || el.classList.contains('flowerTable')) return true;
         if (el.tagName.toLowerCase() === 'table' && el.querySelector('img[src*="~media"]')) return true;
         if (el.tagName.toLowerCase() === 'canvas') return true;
@@ -539,16 +557,30 @@ def extract_options(page, root_locator=None):
         ).all()
 
     _walker_js = f"el => {{ {_MATH_WALKER_JS} walk(el); return out.trim(); }}"
+    _exp_js = """el => {
+        if (el.classList.contains('expression-tile-bank') || el.querySelector('.expression-tile-bank')) {
+            const spans = Array.from(el.querySelectorAll('span'));
+            if (spans.length > 0) {
+                return spans.map(s => s.innerText).join(' ').trim();
+            }
+        }
+        return null;
+    }"""
+
     for tile in tiles:
         try:
-            gm = tile.locator(".GeneticallyModified").first
-            if gm.count() > 0:
-                try:
-                    label = gm.evaluate(_walker_js) or ""
-                except Exception:
-                    label = gm.inner_text()
+            exp_label = tile.evaluate(_exp_js)
+            if exp_label is not None:
+                label = exp_label
             else:
-                label = tile.get_attribute("aria-label") or tile.inner_text() or ""
+                gm = tile.locator(".GeneticallyModified").first
+                if gm.count() > 0:
+                    try:
+                        label = gm.evaluate(_walker_js) or ""
+                    except Exception:
+                        label = gm.inner_text()
+                else:
+                    label = tile.get_attribute("aria-label") or tile.inner_text() or ""
             if label and label.strip():
                 clean_label = " ".join(label.replace("\n", " ").split())
                 if clean_label.lower().rstrip(",.!") in ("options", "option"):
@@ -568,10 +600,14 @@ def extract_options(page, root_locator=None):
             ).all()
         for tile in drag_tiles:
             try:
-                try:
-                    label = tile.evaluate(_walker_js) or ""
-                except Exception:
-                    label = tile.inner_text()
+                exp_label = tile.evaluate(_exp_js)
+                if exp_label is not None:
+                    label = exp_label
+                else:
+                    try:
+                        label = tile.evaluate(_walker_js) or ""
+                    except Exception:
+                        label = tile.inner_text()
                 clean_label = " ".join(label.replace("\n", " ").split())
                 if clean_label.lower().rstrip(",.!") in ("options", "option"):
                     continue
@@ -590,15 +626,77 @@ def extract_options(page, root_locator=None):
             ).all()
         for slot in bank_slots:
             try:
-                content = slot.locator(".itemContent").first
-                target = content if content.count() > 0 else slot
-                label = target.evaluate(_walker_js) or ""
+                exp_label = slot.evaluate(_exp_js)
+                if exp_label is not None:
+                    label = exp_label
+                else:
+                    content = slot.locator(".itemContent").first
+                    target = content if content.count() > 0 else slot
+                    label = target.evaluate(_walker_js) or ""
                 clean_label = " ".join(label.replace("\n", " ").split())
                 if clean_label.lower().rstrip(",.!") in ("options", "option"):
                     continue
                 options.append(clean_label)
             except Exception:
                 continue
+
+    # Expression building tiles: .expression-tile-parking-space
+    if not options:
+        if root_locator is not None:
+            exp_tiles = root_locator.locator(".expression-tile-parking-space").all()
+        else:
+            exp_tiles = page.locator(
+                ".question-and-submission-view .expression-tile-parking-space, "
+                ".ixl-practice-crate .expression-tile-parking-space"
+            ).all()
+        if exp_tiles:
+            numbers = []
+            operators = []
+            for tile in exp_tiles:
+                try:
+                    expr = tile.locator(".expression-tile").first
+                    target = expr if expr.count() > 0 else tile
+                    
+                    label = target.evaluate(_walker_js) or target.inner_text() or ""
+                    clean_label = " ".join(label.replace("\n", " ").split())
+                    if not clean_label.strip():
+                        continue
+                    
+                    tile_type = tile.get_attribute("data-type") or ""
+                    tile_class = tile.get_attribute("class") or ""
+                    if "NUMBER" in tile_type.upper() or "number" in tile_class.lower():
+                        numbers.append(clean_label)
+                    elif "OPERATOR" in tile_type.upper() or "operator" in tile_class.lower():
+                        operators.append(clean_label)
+                    else:
+                        if clean_label in ["+", "-", "=", "x", "×", "÷", "/", "−"]:
+                            operators.append(clean_label)
+                        else:
+                            numbers.append(clean_label)
+                except Exception:
+                    continue
+
+            seen_nums = set()
+            uniq_nums = []
+            for n in numbers:
+                if n not in seen_nums:
+                    seen_nums.add(n)
+                    uniq_nums.append(n)
+            
+            seen_ops = set()
+            uniq_ops = []
+            for o in operators:
+                if o not in seen_ops:
+                    seen_ops.add(o)
+                    uniq_ops.append(o)
+            
+            lines = []
+            if uniq_nums:
+                lines.append(" ".join(uniq_nums))
+            if uniq_ops:
+                lines.append(" ".join(uniq_ops))
+            if lines:
+                options.append("\n".join(lines))
 
     seen, unique = set(), []
     for o in options:
@@ -676,6 +774,10 @@ def extract_correct_answer(page):
         except Exception:
             pass
 
+    if answer:
+        for phrase in ["Option,", "Correct answer,"]:
+            answer = answer.replace(phrase, "")
+        answer = answer.strip()
     return answer
 
 #  DIAGRAM EXTRACTION
@@ -736,9 +838,34 @@ def _wait_for_element_painted(element, retries=18, delay_ms=50):
     return None
 
 
-def _screenshot_element(element, path):
+# Screenshot padding (px) added above and below the element's layout bbox to
+# capture visual overflow from negative CSS margins (cube SVGs: -30px top/bottom)
+# and absolutely-positioned children above the element top (number-line +1 labels
+# sit at top:-23px). Clamped to viewport so it never wraps around.
+_SCREENSHOT_VPAD = 32
+_SCREENSHOT_HPAD = 4
+
+
+def _screenshot_element(page, element, path):
     try:
-        element.screenshot(path=path)
+        page.wait_for_timeout(300)
+        # Use element.bounding_box() (Playwright built-in) — returns viewport-
+        # relative coordinates, which is what page.screenshot(clip=...) expects.
+        # This avoids the systematic misalignment that element.screenshot() has
+        # when the element's visual content overflows its layout bounding box
+        # (e.g. cube SVGs with margin:-30px or number-line labels at top:-23px).
+        bb = element.bounding_box()
+        if bb is None:
+            return False
+        vw = page.viewport_size["width"]
+        vh = page.viewport_size["height"]
+        x = max(0, bb["x"] - _SCREENSHOT_HPAD)
+        y = max(0, bb["y"] - _SCREENSHOT_VPAD)
+        w = min(vw - x, bb["width"]  + _SCREENSHOT_HPAD * 2)
+        h = min(vh - y, bb["height"] + _SCREENSHOT_VPAD * 2)
+        if w <= 0 or h <= 0:
+            return False
+        page.screenshot(path=path, clip={"x": x, "y": y, "width": w, "height": h})
         return True
     except Exception as e:
         print(f"     [!] screenshot failed ({path}): {e}")
@@ -784,9 +911,38 @@ def _tile_has_diagram(tile):
     return False
 
 
+def _tile_has_media(tile):
+    try:
+        return tile.evaluate("""tile => {
+            if (tile.querySelector('svg')) return true;
+            if (tile.querySelector('canvas')) return true;
+            if (tile.querySelector('.simple-item-table')) return true;
+            const imgs = tile.querySelectorAll('img');
+            for (const img of imgs) {
+                const src = img.getAttribute('src') || '';
+                if (src && !src.includes('spacer.gif')) return true;
+            }
+            const allEls = tile.querySelectorAll('*');
+            for (const el of allEls) {
+                const bg = window.getComputedStyle(el).backgroundImage;
+                if (bg && bg !== 'none' && bg.includes('url(')) {
+                    return true;
+                }
+                const styleAttr = el.getAttribute('style') || '';
+                if (styleAttr.includes('background') && styleAttr.includes('url(')) {
+                    return true;
+                }
+            }
+            return false;
+        }""")
+    except Exception:
+        return False
+
+
 
 def extract_diagrams_screenshots(page, question_index, skill_name):
-    slug = skill_name.replace(" ", "_")[:40]
+    clean_skill = re.sub(r'[\\/*?:"<>|]', "", skill_name)
+    slug = clean_skill.replace(" ", "_")[:40]
     ts = int(time.time())
 
     q_folder_name = f"{slug}_q{question_index + 1}_qdiag_{ts}"
@@ -857,7 +1013,7 @@ def extract_diagrams_screenshots(page, question_index, skill_name):
             tile_class = tile.get_attribute("class") or ""
             if "TEXT" in tile_class.split():
                 continue
-            if not _tile_has_diagram(tile):
+            if not (_tile_has_diagram(tile) or _tile_has_media(tile)):
                 continue
 
             target_el = tile
@@ -878,7 +1034,7 @@ def extract_diagrams_screenshots(page, question_index, skill_name):
                 if opt_folder_id is None:
                     opt_folder_id = _create_drive_folder(opt_folder_name, DRIVE_FOLDER_ID)
                 path = os.path.join(opt_folder_path, f"{slug}_q{question_index + 1}_opt{idx}_{ts}.png")
-                if _screenshot_element(target_el, path):
+                if _screenshot_element(page, target_el, path):
                     _upload_file_to_drive(path, opt_folder_id)
                     opt_paths.append(path)
                     print(f"       [Opt{idx}] SAVED tile screenshot: {path}")
@@ -929,7 +1085,7 @@ def extract_diagrams_screenshots(page, question_index, skill_name):
                     opt_folder_id = _create_drive_folder(opt_folder_name, DRIVE_FOLDER_ID)
                 path = os.path.join(opt_folder_path,
                                     f"{slug}_q{question_index + 1}_bin{b_idx + 1}_{ts}.png")
-                if _screenshot_element(bin_el, path):
+                if _screenshot_element(page, bin_el, path):
                     _upload_file_to_drive(path, opt_folder_id)
                     opt_paths.append(path)
                     print(f"       [Bin{b_idx + 1}] SAVED bin screenshot: {path}")
@@ -946,18 +1102,45 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
     seen_boxes = []
 
     def already_captured(bb):
+        if bb is None:
+            return False
         for seen in seen_boxes:
+            # Standard overlap check: candidate overlaps 70%+ of a seen box
             if _boxes_overlap(seen, bb):
+                return True
+            # Containment check: candidate is fully inside a seen box (child element).
+            # Prevents sub-elements (e.g. individual SVG shapes inside a tenFrames table
+            # that was already shot as a whole) from being re-captured.
+            if (seen["x"] <= bb["x"] and seen["y"] <= bb["y"]
+                    and seen["x"] + seen["width"]  >= bb["x"] + bb["width"]
+                    and seen["y"] + seen["height"] >= bb["y"] + bb["height"]):
                 return True
         return False
 
     def do_screenshot(element, tag, layer="?", signal="?"):
         try:
-            if element.locator(".standalone-cube-train-wrapper .horizontal-cell").count() > 0:
+            el_tag = element.evaluate("el => el.tagName.toLowerCase()")
+        except Exception:
+            el_tag = ""
+
+        try:
+            # SVG <g> elements have no valid HTML bounding box — getBoundingClientRect()
+            # on a <g> returns coordinates in the SVG's internal coordinate system, not
+            # the HTML page. Walk up to the nearest <svg> ancestor which does have a
+            # proper HTML bbox and can be screenshotted correctly.
+            if el_tag == "g":
+                parent_svg = element.locator("xpath=ancestor::svg[1]")
+                if parent_svg.count() > 0:
+                    element = parent_svg.first
+            elif element.locator(".standalone-cube-train-wrapper .horizontal-cell").count() > 0:
                 element = element.locator(".standalone-cube-train-wrapper .horizontal-cell").first
             elif "standalone-cube-train-wrapper" in (element.get_attribute("class") or ""):
                 if element.locator(".horizontal-cell").count() > 0:
                     element = element.locator(".horizontal-cell").first
+            elif "static-cube-train" in (element.get_attribute("class") or ""):
+                # Screenshot the static-cube-train div directly — do NOT drill into children
+                # because the cube SVGs have negative margins that overflow the div bounds.
+                pass
             elif element.locator(".horizontal-cell").count() > 0:
                 element = element.locator(".horizontal-cell").first
             elif element.locator(".vector-image").count() > 0:
@@ -984,7 +1167,7 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
             meta = {"tag": "?", "cls": f"<eval failed: {e}>", "role": "?", "al": "?"}
         idx  = len(paths) + 1
         path = os.path.join(target_dir, f"{prefix}_{tag}_{ts}_{idx}.png")
-        if _screenshot_element(element, path):
+        if _screenshot_element(page, element, path):
             paths.append(path)
             seen_boxes.append(bb)
             if drive_folder_id:
@@ -1010,11 +1193,30 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
             return False
         return True
 
+    def _is_inside_option(el):
+        if scope_label != "Q":
+            return False
+        try:
+            return el.evaluate("el => el.closest('.SelectableTile, .TileMultipleChoices, .parking-lot, .draggable-tile, .ddItemBankDropSlot, .expression-tile-parking-space, .answer-box') !== null")
+        except Exception:
+            return False
+
+    def _is_inside_venn_diagram(el):
+        """Return True if el is a child/descendant of a venn diagram container (not the container itself).
+        Prevents individual shapes inside dragAndDropVennDiagramContainer from getting their own screenshot."""
+        try:
+            return el.evaluate("""el => {
+                if (el.matches('[class*="dragAndDropVennDiagramContainer"]')) return false;
+                return el.closest('[class*="dragAndDropVennDiagramContainer"]') !== null;
+            }""")
+        except Exception:
+            return False
+
     def get_elements(signal):
         if root_locator is not None:
             try:
                 return [el for el in root_locator.locator(signal).all()
-                        if _is_really_visible(el)]
+                        if _is_really_visible(el) and not _is_inside_option(el) and not _is_inside_venn_diagram(el)]
             except Exception:
                 return []
         else:
@@ -1024,7 +1226,7 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
                 try:
                     els = page.locator(f"{part} {signal}").all()
                     for el in els:
-                        if not _is_really_visible(el):
+                        if not _is_really_visible(el) or _is_inside_option(el) or _is_inside_venn_diagram(el):
                             continue
                         bb = _safe_bbox(el)
                         coord_key = (round(bb["x"]), round(bb["y"]),
@@ -1037,6 +1239,10 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
             return results
 
     L1_INTEGRATED = [
+        # Series-of-components MUST come before vector-image-wrapper so the whole
+        # row (both image groups side-by-side) is captured as one unit and each
+        # individual vector-image-wrapper inside gets dropped by the containment check.
+        "[class*='series-of-components']",
         ".horizontal-scroll-hoc-wrapper",
         ".horizontal-scroll-element-wrapper",
         ".multiplication-model-container",
@@ -1055,10 +1261,27 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
         ".standalone-cube-train-wrapper",
         ".hundredTable",
         "table:has(img[src*='~media'])",
+        # New integrated signals
+        ".train-and-item-group",
+        ".train-and-element-group",
+        ".measurementRegion",
+        ".calendar-container",
+        ".diagramLabelContainer",
+        ".QMMeasurable",
+        "[class*='story-book']",
+        "[class*='static-cube-train']",
+        "[class*='qTable']",
+        "[class*='pvmContainer']", 
+        "[class*='clockContainer']",
+        "[class*='currencyCoinDiv']",
+        "[class*='horizontal-scroll']",
+        "[class*='dragAndDropContainer']",
+        "[class*='SelectableTime']",
+        ".simple-item-table"
     ]
     # These can have multiple real instances per question (e.g. two number lines for
     # equivalence questions, or a standalone pie chart) — no phantom de-dupe applied.
-    L1_MULTI      = [".graphingBaseContainer", ".pie-chart", ".qPVTable", ".guide-counting-clickable-image-container"]
+    L1_MULTI      = [".graphingBaseContainer", ".pie-chart", ".qPVTable", ".guide-counting-clickable-image-container", "[class*='tenFrames']"]
     L1_REPEATING  = [".guide-counting-qm"]
 
     for container_sel in L1_INTEGRATED + L1_MULTI + L1_REPEATING:
@@ -1090,7 +1313,8 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
 
 # After submission, screenshot regular diagrams in the answer box and each bin (with placed tiles) as the correct answer.
 def _screenshot_answer_diagrams(page, question_index, skill_name, ts):
-    slug = skill_name.replace(" ", "_")[:40]
+    clean_skill = re.sub(r'[\\/*?:"<>|]', "", skill_name)
+    slug = clean_skill.replace(" ", "_")[:40]
     ans_folder_name = f"{slug}_q{question_index + 1}_ansdiag_{ts}"
     ans_folder_path = os.path.join(IMAGE_DIR, ans_folder_name)
     ans_folder_id = None
@@ -1101,36 +1325,63 @@ def _screenshot_answer_diagrams(page, question_index, skill_name, ts):
         answer_box = page.locator(".answer-box").first
         if answer_box.count() > 0 and answer_box.is_visible():
             tiles = answer_box.locator(".SelectableTile")
+            is_tile = False
             if tiles.count() > 0:
                 selected_tile = answer_box.locator(".SelectableTile.selected")
                 if selected_tile.count() > 0:
                     answer_box = selected_tile.first
+                    is_tile = True
                 else:
                     answer_box = tiles.first
+                    is_tile = True
 
-            has_diagram = False
-            for signal in DIAGRAM_SIGNALS:
-                try:
-                    if answer_box.locator(signal).count() > 0:
-                        has_diagram = True
-                        break
-                except Exception:
-                    pass
+            if is_tile:
+                tile_class = answer_box.get_attribute("class") or ""
+                if "TEXT" not in tile_class.split() and (_tile_has_diagram(answer_box) or _tile_has_media(answer_box)):
+                    target_el = answer_box
+                    try:
+                        if answer_box.locator(".standalone-cube-train-wrapper .horizontal-cell").count() > 0:
+                            target_el = answer_box.locator(".standalone-cube-train-wrapper .horizontal-cell").first
+                        elif answer_box.locator(".horizontal-cell").count() > 0:
+                            target_el = answer_box.locator(".horizontal-cell").first
+                        elif answer_box.locator(".vector-image").count() > 0:
+                            target_el = answer_box.locator(".vector-image").first
+                    except Exception:
+                        pass
+                    
+                    bb = _wait_for_element_painted(target_el)
+                    if bb and bb["width"] > 2 and bb["height"] > 2:
+                        os.makedirs(ans_folder_path, exist_ok=True)
+                        ans_folder_id = _create_drive_folder(ans_folder_name, DRIVE_FOLDER_ID)
+                        path = os.path.join(ans_folder_path, f"{slug}_q{question_index + 1}_ans_tile_{ts}.png")
+                        if _screenshot_element(page, target_el, path):
+                            _upload_file_to_drive(path, ans_folder_id)
+                            paths.append(path)
+                            print(f"       [Ans] SAVED answer tile screenshot: {path}")
+            else:
+                has_diagram = False
+                for signal in DIAGRAM_SIGNALS:
+                    try:
+                        if answer_box.locator(signal).count() > 0:
+                            has_diagram = True
+                            break
+                    except Exception:
+                        pass
 
-            if has_diagram:
-                os.makedirs(ans_folder_path, exist_ok=True)
-                ans_folder_id = _create_drive_folder(ans_folder_name, DRIVE_FOLDER_ID)
-                ans_diag_paths = _extract_from_scope(
-                    page=page,
-                    scope_parts=[],
-                    root_locator=answer_box,
-                    scope_label="Ans",
-                    prefix=f"{slug}_q{question_index + 1}_ans",
-                    ts=ts,
-                    save_dir=ans_folder_path,
-                    drive_folder_id=ans_folder_id,
-                )
-                paths.extend(ans_diag_paths)
+                if has_diagram:
+                    os.makedirs(ans_folder_path, exist_ok=True)
+                    ans_folder_id = _create_drive_folder(ans_folder_name, DRIVE_FOLDER_ID)
+                    ans_diag_paths = _extract_from_scope(
+                        page=page,
+                        scope_parts=[],
+                        root_locator=answer_box,
+                        scope_label="Ans",
+                        prefix=f"{slug}_q{question_index + 1}_ans",
+                        ts=ts,
+                        save_dir=ans_folder_path,
+                        drive_folder_id=ans_folder_id,
+                    )
+                    paths.extend(ans_diag_paths)
     except Exception as e:
         print(f"     [!] answer diagram screenshot failed: {e}")
 
@@ -1187,7 +1438,7 @@ def _screenshot_answer_diagrams(page, question_index, skill_name, ts):
                     ans_folder_id = _create_drive_folder(ans_folder_name, DRIVE_FOLDER_ID)
                 path = os.path.join(ans_folder_path,
                                     f"{slug}_q{question_index + 1}_ans_bin{b_idx + 1}_{ts}.png")
-                if _screenshot_element(bin_el, path):
+                if _screenshot_element(page, bin_el, path):
                     _upload_file_to_drive(path, ans_folder_id)
                     paths.append(path)
                     print(f"       [AnsBin{b_idx + 1}] SAVED answer bin: {path}")
@@ -1210,7 +1461,7 @@ def extract_and_advance(page, category_name, skill_name, serial_tracker):
             )
             page.wait_for_timeout(800)
 
-            for _ in range(20):
+            for _ in range(41):
                 candidate = extract_question_text(page)
                 if candidate and candidate != previous_question_text:
                     break
@@ -1347,6 +1598,18 @@ def run_scraper():
         for cat_index in range(total_categories):
             # Re-fetch count in case DOM changed after navigation
             current_count = page.locator("div.skill-tree-category").count()
+            
+            scroll_attempts = 0
+            while cat_index >= current_count and scroll_attempts < 10:
+                print(f"  [Scroll] Category index {cat_index} not in DOM (current count: {current_count}). Scrolling to load...")
+                try:
+                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    page.wait_for_timeout(1000)
+                except Exception:
+                    pass
+                current_count = page.locator("div.skill-tree-category").count()
+                scroll_attempts += 1
+
             if cat_index >= current_count:
                 print(f"  [!] Category index {cat_index} out of range (only {current_count} found). Stopping.")
                 break
@@ -1408,9 +1671,9 @@ def run_scraper():
                 print("  -> Retreating to main directory...")
                 try:
                     breadcrumb = page.locator(
-                        'a.breadcrumb-link:has-text("First grade"), '
-                        'a.breadcrumb-link[href="/math/grade-1"], '
-                        'a.breadcrumb-link[href="/maths/class-i"]'
+                        'a.breadcrumb-link:has-text("Third grade"), '
+                        'a.breadcrumb-link[href="/math/grade-3"], '
+                        'a.breadcrumb-link[href="/maths/class-iii"]'
                     ).first
                     breadcrumb.wait_for(state="visible", timeout=10000)
                     breadcrumb.click()
