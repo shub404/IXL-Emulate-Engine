@@ -1,7 +1,11 @@
 ixl_state.json
+ixl_grade1_questions.xlsx
+ixl_grade2_questions.xlsx
 ixl_grade3_questions.xlsx
+ixl_grade4_questions.xlsx
+ixl_grade5_questions.xlsx
 ixl_diagrams/
 __pycache__/
 *.env
-missedImages.html
-missingSkill.html
+token.json
+client_secret.json
