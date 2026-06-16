@@ -5,7 +5,9 @@ ixl_grade3_questions.xlsx
 ixl_grade4_questions.xlsx
 ixl_grade5_questions.xlsx
 ixl_diagrams/
+ixl_explanations/
 __pycache__/
+docs
 *.env
 token.json
 client_secret.json

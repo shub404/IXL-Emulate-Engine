@@ -1,42 +1,37 @@
 import os
 import time
-import base64
 import urllib.parse
-from urllib.parse import urljoin
-import requests
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, Alignment, Border, Side
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from playwright.sync_api import sync_playwright
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-from concurrent.futures import ThreadPoolExecutor
-from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
-import threading
 
-BASE_URL = "https://in.ixl.com"
-TARGET_URL = "https://www.ixl.com/math/grade-3"
+TARGET_URL = "https://www.ixl.com/math/grade-5"
 LOGIN_URL = "https://in.ixl.com/signin"
-EMAIL = "parkerhouston411@kacad"
-PASSWORD = "81party"
+EMAIL = os.getenv("IXL_EMAIL", "")
+PASSWORD = os.getenv("IXL_PASSWORD", "")
 QUESTIONS_PER_SKILL = 3
-EXCEL_FILENAME = "ixl_grade3_questions.xlsx"
+EXCEL_FILENAME = "ixl_grade5_questions[test].xlsx"
 IMAGE_DIR = "ixl_diagrams"
-DRIVE_FOLDER_ID = "1ffreALNKiFdOO2dT6Qmunp-vXvO-u3Nm"
+DRIVE_FOLDER_ID = "1-S1b8hdNe2m6XndIj1bxB1OQ44XgvUzR"
+EXPL_DIR = "ixl_explanations"
+EXPL_TXT_DRIVE_FOLDER_ID = "1v9TZbWhPxwE6iu2MdIVi46w-NshMXLoI"
+EXPL_IMG_DRIVE_FOLDER_ID = "1W75WZ5b-LDWVi3depGmUM-eyEnPoKN8V"
 SCOPES = ['https://www.googleapis.com/auth/drive']
 CLIENT_SECRET_FILE = "client_secret.json"
 TOKEN_FILE = "token.json"
 
-# Mode 2: set this to the skill URL you want to resume from
-START_URL = "https://www.ixl.com/math/grade-1/giving-to-charity"
+START_URL = "https://www.ixl.com/math/grade-5/identify-mistakes-involving-the-order-of-operations"
 THIN = Side(style="thin", color="D9D9D9")
 BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
-
-JUNK_LABELS = {"scratchpad", "eraser", "highlighter - blue",
-               "pencil - black", "pencil", "highlighter"}
 
 ICON_MAX = 32
 
@@ -63,6 +58,7 @@ DIAGRAM_SIGNALS = [
     ".guide-counting-clickable-image-container",
     ".standalone-cube-train-wrapper",
     ".hundredTable",
+    ".fractionBarArithmeticTable",
     # New signals
     ".train-and-item-group",
     ".train-and-element-group",
@@ -73,7 +69,7 @@ DIAGRAM_SIGNALS = [
     "[class*='tenFrames']",
     "[class*='series-of-components']",
     "[class*='qTable']",
-    "[class*='pvmContainer']", 
+    "[class*='pvmContainer']",
     "[class*='clockContainer']",
     "[class*='currencyCoinDiv']",
     "[class*='horizontal-scroll']",
@@ -81,17 +77,14 @@ DIAGRAM_SIGNALS = [
     "[class*='story-book']",
     "[class*='static-cube-train']",
     "[class*='SelectableTime']",
-    ".simple-item-table"
+    ".simple-item-table",
+    ".fill-in-section",
+    ".explLineList"
 ]
 
 Q_SCOPE_PARTS = [
     ".question-and-submission-view .secContent",
 ]
-
-# image dimensions in Excel
-EXCEL_IMG_MAX_W = 200
-EXCEL_IMG_MAX_H = 150
-EXCEL_ROW_HEIGHT_PER_IMG = 115
 
 _drive_service = None
 _drive_executor = ThreadPoolExecutor(max_workers=5)
@@ -148,6 +141,19 @@ def _upload_file_to_drive_sync(file_path, folder_id):
 def _upload_file_to_drive(file_path, folder_id):
     _drive_executor.submit(_upload_file_to_drive_sync, file_path, folder_id)
 
+def _upload_file_to_drive_sync_return_url(file_path, folder_id, mimetype='image/png'):
+    try:
+        service = _get_thread_drive_service()
+        metadata = {'name': os.path.basename(file_path), 'parents': [folder_id]}
+        media = MediaFileUpload(file_path, mimetype=mimetype)
+        resp = service.files().create(body=metadata, media_body=media, fields='id').execute()
+        file_id = resp.get('id')
+        if file_id:
+            return f"https://drive.google.com/file/d/{file_id}/view"
+    except Exception as e:
+        print(f"     [!] Drive upload failed ({file_path}): {e}")
+    return None
+
 
 def _drive_subfolder_url(folder_id):
     return f"https://drive.google.com/drive/folders/{folder_id}"
@@ -155,17 +161,17 @@ def _drive_subfolder_url(folder_id):
 
 def setup_dir():
     os.makedirs(IMAGE_DIR, exist_ok=True)
+    os.makedirs(EXPL_DIR, exist_ok=True)
 
-# Create excel if doesnt exist
 def init_excel():
     if os.path.exists(EXCEL_FILENAME):
         return
     wb = Workbook()
     ws = wb.active
-    ws.title = "Grade 3 Maths"
-    headers = ["#", "Category", "Skill Name", "Question No",
+    ws.title = "Grade 5 Maths"
+    headers = ["Ques ID", "#", "Category", "Skill Name", "Question No",
                "Question Text", "Question Diagram", "Question Options",
-               "Option Diagrams", "Correct Answer", "Answer Diagram"]
+               "Option Diagrams", "Correct Answer", "Answer Diagram", "Explanation"]
     header_font = Font(name="Calibri", bold=True, size=11)
 
     for col, label in enumerate(headers, start=1):
@@ -174,17 +180,17 @@ def init_excel():
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         cell.border = BORDER
 
-    widths = {"A": 6, "B": 30, "C": 45, "D": 12,
-              "E": 70, "F": 50, "G": 35, "H": 50, "I": 35, "J": 55}
+    widths = {"A": 8, "B": 6, "C": 30, "D": 45, "E": 12,
+              "F": 70, "G": 50, "H": 35, "I": 50, "J": 35, "K": 55, "L": 55}
     for col, w in widths.items():
         ws.column_dimensions[col].width = w
 
     ws.freeze_panes = "A2"
-    ws.auto_filter.ref = "A1:J1"
+    ws.auto_filter.ref = "A1:L1"
     wb.save(EXCEL_FILENAME)
 
 
-def append_to_excel(row_data, q_diagram_url, opt_diagram_url, ans_diagram_url=None):
+def append_to_excel(question_id, row_data, q_diagram_url, opt_diagram_url, ans_diagram_url=None, expl_url=None):
     try:
         wb = load_workbook(EXCEL_FILENAME)
         ws = wb.active
@@ -196,19 +202,20 @@ def append_to_excel(row_data, q_diagram_url, opt_diagram_url, ans_diagram_url=No
             return ILLEGAL_CHARACTERS_RE.sub('', str(s))
 
         text_columns = {
-            1: (_clean_str(row_data[0]), None),
-            2: (_clean_str(row_data[1]), None),
-            3: (_clean_str(row_data[2]), None),
-            4: (_clean_str(row_data[3]), None),
-            5: (_clean_str(row_data[4]), None),
-            6: (_clean_str(q_diagram_url), _clean_str(q_diagram_url) if q_diagram_url else None),
-            7: (_clean_str(row_data[5]), None),
-            8: (_clean_str(opt_diagram_url), _clean_str(opt_diagram_url) if opt_diagram_url else None),
-            # Col I: plain correct-answer text (never hyperlinked)
-            9: (_clean_str(row_data[6]), None),
-            # Col J: Drive URL for answer diagram, hyperlinked (empty if no diagram)
-            10: (_clean_str(ans_diagram_url) if ans_diagram_url else "",
+            1: (question_id, None),
+            2: (_clean_str(row_data[0]), None),
+            3: (_clean_str(row_data[1]), None),
+            4: (_clean_str(row_data[2]), None),
+            5: (_clean_str(row_data[3]), None),
+            6: (_clean_str(row_data[4]), None),
+            7: (_clean_str(q_diagram_url), _clean_str(q_diagram_url) if q_diagram_url else None),
+            8: (_clean_str(row_data[5]), None),
+            9: (_clean_str(opt_diagram_url), _clean_str(opt_diagram_url) if opt_diagram_url else None),
+            10: (_clean_str(row_data[6]), None),
+            11: (_clean_str(ans_diagram_url) if ans_diagram_url else "",
                  _clean_str(ans_diagram_url) if ans_diagram_url else None),
+            12: (_clean_str(expl_url) if expl_url else "",
+                 _clean_str(expl_url) if expl_url else None),
         }
 
         for col_idx, (value, h_link) in text_columns.items():
@@ -219,7 +226,7 @@ def append_to_excel(row_data, q_diagram_url, opt_diagram_url, ans_diagram_url=No
             else:
                 cell.font = cell_font
             cell.border = BORDER
-            if col_idx in [1, 4]:
+            if col_idx in [1, 2, 5]:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
             else:
                 cell.alignment = Alignment(vertical="top", wrap_text=True)
@@ -228,16 +235,15 @@ def append_to_excel(row_data, q_diagram_url, opt_diagram_url, ans_diagram_url=No
             ws.row_dimensions[current_row].height = 40
 
         wb.save(EXCEL_FILENAME)
-        print(f"       [Excel] Successfully saved Q{row_data[3]} to {EXCEL_FILENAME}")
+        print(f"       [Excel] Successfully saved Q{row_data[3]} (Ques ID {question_id}) to {EXCEL_FILENAME}")
 
     except PermissionError:
         print(f"\n[!] Close {EXCEL_FILENAME} in Excel immediately.")
         input("Press ENTER here once closed to resume saving data...")
-        append_to_excel(row_data, q_diagram_url, opt_diagram_url, ans_diagram_url)
+        append_to_excel(question_id, row_data, q_diagram_url, opt_diagram_url, ans_diagram_url, expl_url)
     except Exception as e:
         print(f"       [!] Failed to append to Excel: {e}")
 
-# jscode to extract text from the question view
 _MATH_WALKER_JS = """
     const _DIAGRAM_CLASSES = [
         'dc-fraction-strip-model', 'open-number-line', 'graphingBaseContainer',
@@ -248,7 +254,8 @@ _MATH_WALKER_JS = """
         'canvas-container-div', 'tenFrames-single', 'static-cube-train',
         'simple-item-table', 'expression-tile-bank', 'expression-tile-parking-space', 'expression-tile',
         'train-and-item-group', 'train-and-element-group', 'measurementRegion',
-        'calendar-container', 'diagramLabelContainer', 'QMMeasurable'
+        'calendar-container', 'diagramLabelContainer', 'QMMeasurable',
+        'responsive-old-list-in-columns', 'enclosedTextArea', 'fill-in-section'
     ];
     const isDiagramTableOrElement = (el) => {
         if (!el.classList) return false;
@@ -288,14 +295,28 @@ _MATH_WALKER_JS = """
                         const den = rows.length > 1 ? rows[1].textContent.trim() : '?';
                         out += num + '/' + den;
                     }
+                } else if (child.classList && child.classList.contains('old-fraction-in-canvas')) {
+                    // Old-style fraction overlaid on canvas: div.old-fraction-in-canvas > table
+                    const tbl = child.querySelector('table');
+                    if (tbl && tbl.hasAttribute('audioalt')) {
+                        out += tbl.getAttribute('audioalt');
+                    } else if (tbl) {
+                        const rows = tbl.querySelectorAll('tr');
+                        const num = rows.length > 0 ? rows[0].textContent.trim() : '?';
+                        const den = rows.length > 1 ? rows[1].textContent.trim() : '?';
+                        out += '( ' + num + ' ) / ( ' + den + ' )';
+                    }
                 } else if (child.classList && child.classList.contains('vFrac')) {
+                    const _savedOut = out;
+                    out = '';
                     const numEl = child.querySelector('.numerator');
+                    if (numEl) walk(numEl);
+                    const numText = out.trim() || '?';
+                    out = '';
                     const denEl = child.querySelector('.denominator');
-                    const numText = (numEl && numEl.querySelector('input.fillIn')) ? '_'
-                                  : (numEl ? numEl.textContent.trim() : '?');
-                    const denText = (denEl && denEl.querySelector('input.fillIn')) ? '_'
-                                  : (denEl ? denEl.textContent.trim() : '?');
-                    out += numText + '/' + denText;
+                    if (denEl) walk(denEl);
+                    const denText = out.trim() || '?';
+                    out = _savedOut + '( ' + numText + ' ) / ( ' + denText + ' )';
                 } else if (child.classList && child.classList.contains('vertArith')) {
                     const rows = [...child.querySelectorAll('.vertArithRow')];
                     const operands = [];
@@ -377,6 +398,18 @@ _MATH_WALKER_JS = """
                         out += entries[0] + ' ' + op + ' ' + entries[1];
                         if (entries.length >= 3) out += ' = ' + entries[2];
                     }
+                } else if (child.classList && child.classList.contains('fractionBarArithmeticTable')) {
+                    // Arithmetic fraction-bar table: extract aria-label summary from each row's visible cells
+                    const rows = child.querySelectorAll('.fractionBarArithmeticTableRow');
+                    const parts = [];
+                    for (const row of rows) {
+                        for (const cell of row.children) {
+                            if (cell.getAttribute('aria-hidden') === 'true') continue;
+                            const label = cell.getAttribute('aria-label');
+                            if (label) parts.push(label);
+                        }
+                    }
+                    if (parts.length) out += parts.join(' ');
                 // --- NOW skip diagram containers (after all math checks) ---
                 } else if (isDiagramTableOrElement(child)) {
                     continue;
@@ -388,56 +421,222 @@ _MATH_WALKER_JS = """
     };
 """
 
-"""Only activates for fill-in questions; formats fractions as num/den."""
-def _reconstruct_with_blanks(page, root_selector):
-
-    js = f"""
-    (sel) => {{
-        const root = document.querySelector(sel);
-        if (!root) return null;
-        if (!root.querySelector('input.fillIn')) return null;
-        {_MATH_WALKER_JS}
-        walk(root);
-        return out;
-    }}
-    """
-    try:
-        return page.evaluate(js, root_selector)
-    except Exception:
-        return None
-
-    """Extract text from selector with fractions as num/den; works for all question types."""
-def _extract_math_text(page, root_selector):
-
-    js = f"""
-    (sel) => {{
-        const root = document.querySelector(sel);
-        if (!root) return null;
-        {_MATH_WALKER_JS}
-        walk(root);
-        return out.trim() || null;
-    }}
-    """
-    try:
-        return page.evaluate(js, root_selector)
-    except Exception:
-        return None
-
+_EXPL_WALKER_JS = """
+    const _DIAGRAM_CLASSES = [
+        'dc-fraction-strip-model', 'open-number-line', 'graphingBaseContainer',
+        'pie-chart', 'multiplication-model-container', 'guide-counting-qm',
+        'vector-image-wrapper', 'parking-lot', 'old-table', 'binsContainer', 'qTabularGrid',
+        'gc-cut-shapes', 'shape', 'fractionTopBlockDiv',
+        'react-gc-number-button-grid', 'buttonShape',
+        'canvas-container-div', 'tenFrames-single', 'static-cube-train',
+        'simple-item-table', 'expression-tile-bank', 'expression-tile-parking-space', 'expression-tile',
+        'train-and-item-group', 'train-and-element-group', 'measurementRegion',
+        'calendar-container', 'diagramLabelContainer', 'QMMeasurable',
+        'responsive-old-list-in-columns', 'enclosedTextArea', 'fill-in-section'
+    ];
+    const isDiagramTableOrElement = (el) => {
+        if (!el.classList) return false;
+        if (_DIAGRAM_CLASSES.some(c => el.classList.contains(c))) return true;
+        if (Array.from(el.classList).some(c => c.includes('series-of-components') || c.includes('story-book') || c.includes('qTable') || c.includes('pvmContainer') || c.includes('clockContainer') || c.includes('currencyCoinDiv') || c.includes('horizontal-scroll') || c.includes('dragAndDropContainer') || c.includes('SelectableTime') || c.includes('static-cube-train'))) return true;
+        if (el.classList.contains('hundredTable') || el.classList.contains('flowerTable')) return true;
+        if (el.tagName.toLowerCase() === 'table' && el.querySelector('img[src*="~media"]')) return true;
+        if (el.tagName.toLowerCase() === 'canvas') return true;
+        if (el.getAttribute('role') === 'figure') return true;
+        return false;
+    };
+    let _explImgIdx = 0;
+    let out = '';
+    const walk = (node) => {
+        for (const child of node.childNodes) {
+            if (child.nodeType === Node.TEXT_NODE) {
+                out += child.textContent;
+            } else if (child.nodeType === Node.ELEMENT_NODE) {
+                if (child.getAttribute('aria-hidden') === 'true') continue;
+                const tag = child.tagName.toLowerCase();
+                if (tag === 'button') continue;
+                // Screen-reader-only labels ("Option, ") are noise in explanations
+                if (child.classList && child.classList.contains('sr-only')) continue;
+                // Skip duplicate step label: .cell.explanation direct child of .row (not .entireRight)
+                if (child.classList && child.classList.contains('explanation') &&
+                    child.parentElement && child.parentElement.classList &&
+                    child.parentElement.classList.contains('row') &&
+                    !child.parentElement.classList.contains('entireRight')) {
+                    continue;
+                }
+                // --- Math-expression checks FIRST ---
+                if (tag === 'input' && child.classList.contains('fillIn')) {
+                    out += '_';
+                } else if (tag === 'div' && child.classList && child.classList.contains('drop-slot')) {
+                    out += '_';
+                } else if (tag === 'table' && child.hasAttribute('audioalt')) {
+                    out += child.getAttribute('audioalt');
+                } else if (child.classList && child.classList.contains('old-fraction-in-text')) {
+                    const tbl = child.querySelector('table');
+                    if (tbl && tbl.hasAttribute('audioalt')) {
+                        out += tbl.getAttribute('audioalt');
+                    } else if (tbl) {
+                        const rows = tbl.querySelectorAll('tr');
+                        const num = rows.length > 0 ? rows[0].textContent.trim() : '?';
+                        const den = rows.length > 1 ? rows[1].textContent.trim() : '?';
+                        out += num + '/' + den;
+                    }
+                } else if (child.classList && child.classList.contains('old-fraction-in-canvas')) {
+                    const tbl = child.querySelector('table');
+                    if (tbl && tbl.hasAttribute('audioalt')) {
+                        out += tbl.getAttribute('audioalt');
+                    } else if (tbl) {
+                        const rows = tbl.querySelectorAll('tr');
+                        const num = rows.length > 0 ? rows[0].textContent.trim() : '?';
+                        const den = rows.length > 1 ? rows[1].textContent.trim() : '?';
+                        out += '( ' + num + ' ) / ( ' + den + ' )';
+                    }
+                } else if (child.classList && child.classList.contains('vFrac')) {
+                    const _savedOut = out;
+                    out = '';
+                    const numEl = child.querySelector('.numerator');
+                    if (numEl) walk(numEl);
+                    const numText = out.trim() || '?';
+                    out = '';
+                    const denEl = child.querySelector('.denominator');
+                    if (denEl) walk(denEl);
+                    const denText = out.trim() || '?';
+                    out = _savedOut + '( ' + numText + ' ) / ( ' + denText + ' )';
+                } else if (child.classList && child.classList.contains('vertArith')) {
+                    const rows = [...child.querySelectorAll('.vertArithRow')];
+                    const operands = [];
+                    let operator = '';
+                    let answerBlanks = 0;
+                    for (const row of rows) {
+                        if (row.getAttribute('role') === 'group') {
+                            answerBlanks = row.querySelectorAll('input.fillIn').length;
+                            continue;
+                        }
+                        const opCell = row.querySelector('.vertArithCell.operator');
+                        if (opCell) {
+                            let sym = opCell.textContent.trim();
+                            sym = sym === '\\u2013' ? '-' : sym === '\\u00f7' ? '/' : (sym === '\\u00d7' || sym === '×') ? 'x' : sym;
+                            if (!operator) operator = sym;
+                        } else {
+                            const xSym = row.querySelector('.xSymbol');
+                            if (xSym) { operator = 'x'; }
+                        }
+                        let numStr = '';
+                        for (const cell of row.querySelectorAll('.vertArithCell')) {
+                            if (cell.classList.contains('operator')) continue;
+                            const txt = cell.querySelector('.txt');
+                            if (txt) { numStr += txt.textContent.trim(); }
+                            else if (cell.classList.contains('rtlCell')) {
+                                const d = cell.textContent.trim();
+                                if (d) numStr += d;
+                            } else {
+                                const expNums = cell.querySelectorAll('.expression.number');
+                                for (const expNum of expNums) { numStr += expNum.textContent.trim(); }
+                            }
+                        }
+                        if (numStr) operands.push(numStr);
+                    }
+                    if (operands.length > 0) {
+                        const op = operator || '+';
+                        let eq = operands.join(' ' + op + ' ');
+                        if (answerBlanks > 0) { eq += ' = ' + Array(answerBlanks).fill('_').join(' '); }
+                        out += (op === 'x' ? 'Multiply: ' : '') + eq;
+                    }
+                } else if (child.classList && child.classList.contains('old-vertiArith')) {
+                    const rows = [...child.querySelectorAll('table tr')];
+                    const entries = [];
+                    let operator = '';
+                    for (const row of rows) {
+                        const cells = [...row.querySelectorAll('td')];
+                        let numStr = '';
+                        for (let i = 0; i < cells.length; i++) {
+                            if (i === 0) {
+                                const t = cells[i].textContent.trim();
+                                if (t && t !== ' ') {
+                                    operator = t === '\\u2013' ? '-' : t === '\\u00f7' ? '/' : t;
+                                }
+                                continue;
+                            }
+                            const fi = cells[i].querySelector('input.fillIn');
+                            if (fi) { numStr += '_'; }
+                            else {
+                                const inner = cells[i].querySelector('div') || cells[i];
+                                const t = inner.textContent.trim();
+                                if (t && t !== ' ') numStr += t;
+                            }
+                        }
+                        if (numStr) entries.push(numStr);
+                    }
+                    if (entries.length >= 2) {
+                        const op = operator || '+';
+                        out += entries[0] + ' ' + op + ' ' + entries[1];
+                        if (entries.length >= 3) out += ' = ' + entries[2];
+                    }
+                } else if (child.classList && child.classList.contains('fractionBarArithmeticTable')) {
+                    const rows = child.querySelectorAll('.fractionBarArithmeticTableRow');
+                    const parts = [];
+                    for (const row of rows) {
+                        for (const cell of row.children) {
+                            if (cell.getAttribute('aria-hidden') === 'true') continue;
+                            const label = cell.getAttribute('aria-label');
+                            if (label) parts.push(label);
+                        }
+                    }
+                    if (parts.length) out += parts.join(' ');
+                // explLineList: step-by-step equation table — screenshot as diagram
+                } else if (child.classList && child.classList.contains('explLineList')) {
+                    child.setAttribute('data-expl-img-idx', String(_explImgIdx));
+                    out += '@@IMG:' + _explImgIdx + '@@';
+                    _explImgIdx++;
+                // Solve step rows: recurse then newline
+                } else if (child.classList && child.classList.contains('row')) {
+                    walk(child);
+                    out += '\\n';
+                // Section headers: recurse then newline
+                } else if (child.classList && child.classList.contains('secHdr')) {
+                    walk(child);
+                    out += '\\n';
+                // Numbered list
+                } else if (tag === 'ol') {
+                    const items = [...child.querySelectorAll(':scope > li')];
+                    items.forEach((item, idx) => {
+                        const _savedOut = out;
+                        out = '';
+                        walk(item);
+                        const itemText = out.trim();
+                        out = _savedOut + '\\n' + (idx + 1) + '. ' + itemText;
+                    });
+                // Bulleted list
+                } else if (tag === 'ul') {
+                    const items = [...child.querySelectorAll(':scope > li')];
+                    items.forEach((item) => {
+                        const _savedOut = out;
+                        out = '';
+                        walk(item);
+                        const itemText = out.trim();
+                        out = _savedOut + '\\n\\u2022 ' + itemText;
+                    });
+                // Diagram: tag with index, emit placeholder
+                } else if (isDiagramTableOrElement(child)) {
+                    child.setAttribute('data-expl-img-idx', String(_explImgIdx));
+                    out += '@@IMG:' + _explImgIdx + '@@';
+                    _explImgIdx++;
+                } else {
+                    walk(child);
+                }
+            }
+        }
+    };
+"""
 
 def _normalize_math_text(text):
-    """Normalize Unicode math symbols to plain-text equivalents."""
     if not text:
         return text
-    # Replace Unicode multiplication signs with 'x'
-    text = text.replace('×', ' x ')   # ×
-    text = text.replace('·', ' x ')   # ·  (middle dot often used for mult)
-    text = text.replace('⋅', ' x ')   # ⋅
-    # Replace Unicode minus/dash with '-'
-    text = text.replace('–', '-')      # –  en-dash
-    text = text.replace('−', '-')      # −  minus sign
-    # Replace Unicode division sign with '/'
-    text = text.replace('÷', '/')      # ÷
-    # Collapse multiple spaces
+    text = text.replace('×', ' x ')
+    text = text.replace('·', ' x ')
+    text = text.replace('⋅', ' x ')
+    text = text.replace('–', '-')
+    text = text.replace('−', '-')
+    text = text.replace('÷', '/')
     text = ' '.join(text.split())
     return text
 
@@ -780,11 +979,8 @@ def extract_correct_answer(page):
         answer = answer.strip()
     return answer
 
-#  DIAGRAM EXTRACTION
-
 def _safe_bbox(element):
     try:
-        # Returns page-relative coordinates and dimensions of web element
         return element.evaluate("""el => {
             const rect = el.getBoundingClientRect();
             return {
@@ -798,10 +994,6 @@ def _safe_bbox(element):
         return None
 
 
-# def _is_junk_label(label: str) -> bool:
-#     return (label or "").strip().lower() in JUNK_LABELS
-
-# Used to ignore microscopic elements that hinder the scraper.
 def _is_too_small(bb) -> bool:
     if bb is None:
         return True
@@ -812,7 +1004,6 @@ def _is_too_small(bb) -> bool:
         return True
     return False
 
-# Logic to eliminate duplicate images
 def _boxes_overlap(a, b, threshold=0.70):
     if a is None or b is None:
         return False
@@ -838,10 +1029,7 @@ def _wait_for_element_painted(element, retries=18, delay_ms=50):
     return None
 
 
-# Screenshot padding (px) added above and below the element's layout bbox to
-# capture visual overflow from negative CSS margins (cube SVGs: -30px top/bottom)
-# and absolutely-positioned children above the element top (number-line +1 labels
-# sit at top:-23px). Clamped to viewport so it never wraps around.
+# Padding captures visual overflow from negative CSS margins (cube SVGs, number-line labels).
 _SCREENSHOT_VPAD = 32
 _SCREENSHOT_HPAD = 4
 
@@ -849,11 +1037,8 @@ _SCREENSHOT_HPAD = 4
 def _screenshot_element(page, element, path):
     try:
         page.wait_for_timeout(300)
-        # Use element.bounding_box() (Playwright built-in) — returns viewport-
-        # relative coordinates, which is what page.screenshot(clip=...) expects.
-        # This avoids the systematic misalignment that element.screenshot() has
-        # when the element's visual content overflows its layout bounding box
-        # (e.g. cube SVGs with margin:-30px or number-line labels at top:-23px).
+        # page.screenshot(clip=...) needs viewport-relative coords; element.screenshot()
+        # misaligns when visual content overflows the layout bbox (e.g. SVG negative margins).
         bb = element.bounding_box()
         if bb is None:
             return False
@@ -871,7 +1056,6 @@ def _screenshot_element(page, element, path):
         print(f"     [!] screenshot failed ({path}): {e}")
         return False
 
-# Count number of diagrams
 def _collect_units_from_container(container, scope_label):
     for sel in (
         ".guide-counting-clickable-image-container",
@@ -885,21 +1069,6 @@ def _collect_units_from_container(container, scope_label):
             return units
     return [container]
 
-# Gate: checks ONLY inside .secHdr and .secContent.
-# Each scope part queried independently — no comma-joining with signals.
-def _question_has_diagram(page):
-
-    for scope_part in Q_SCOPE_PARTS:
-        for signal in DIAGRAM_SIGNALS:
-            try:
-                # Greater than 0 means, diagram found!
-                if page.locator(f"{scope_part} {signal}").count() > 0:
-                    return True
-            except Exception:
-                pass
-    return False
-
-# checks signals directly on a single option tile locator
 def _tile_has_diagram(tile):
 
     for signal in DIAGRAM_SIGNALS:
@@ -940,20 +1109,19 @@ def _tile_has_media(tile):
 
 
 
-def extract_diagrams_screenshots(page, question_index, skill_name):
+def extract_diagrams_screenshots(page, question_index, skill_name, question_id):
     clean_skill = re.sub(r'[\\/*?:"<>|]', "", skill_name)
     slug = clean_skill.replace(" ", "_")[:40]
-    ts = int(time.time())
+    prefix_base = f"{question_id}_{slug}_q{question_index + 1}"
 
-    q_folder_name = f"{slug}_q{question_index + 1}_qdiag_{ts}"
-    opt_folder_name = f"{slug}_q{question_index + 1}_optdiag_{ts}"
+    q_folder_name = f"{prefix_base}_qdiag"
+    opt_folder_name = f"{prefix_base}_optdiag"
     q_folder_path = os.path.join(IMAGE_DIR, q_folder_name)
     opt_folder_path = os.path.join(IMAGE_DIR, opt_folder_name)
 
     q_folder_id = None
     opt_folder_id = None
 
-    # Find active question container to avoid duplicate phantom elements
     _q_candidates = []
     _seen_q_coords = set()
     for _scope in (".question-and-submission-view", ".ixl-practice-crate"):
@@ -983,7 +1151,6 @@ def extract_diagrams_screenshots(page, question_index, skill_name):
         active_content = _active_q.locator(".secContent")
         if active_content.count() == 0:
             active_content = _active_q
-        # Check if active question has diagrams
         has_diagram = False
         for signal in DIAGRAM_SIGNALS:
             try:
@@ -995,19 +1162,22 @@ def extract_diagrams_screenshots(page, question_index, skill_name):
 
         if has_diagram:
             os.makedirs(q_folder_path, exist_ok=True)
-            q_folder_id = _create_drive_folder(q_folder_name, DRIVE_FOLDER_ID)
+            _q_fid = [None]
+            def _q_folder_factory(_n=q_folder_name):
+                if _q_fid[0] is None:
+                    _q_fid[0] = _create_drive_folder(_n, DRIVE_FOLDER_ID)
+                return _q_fid[0]
             q_paths = _extract_from_scope(
                 page=page,
                 scope_parts=Q_SCOPE_PARTS,
                 root_locator=active_content,
                 scope_label="Q",
-                prefix=f"{slug}_q{question_index + 1}",
-                ts=ts,
+                prefix=prefix_base,
                 save_dir=q_folder_path,
-                drive_folder_id=q_folder_id,
+                drive_folder_factory=_q_folder_factory,
             )
+            q_folder_id = _q_fid[0]
 
-        # Process option tiles inside the active question
         active_tiles = _active_q.locator(".SelectableTile").all()
         for t_idx, tile in enumerate(active_tiles):
             tile_class = tile.get_attribute("class") or ""
@@ -1033,16 +1203,12 @@ def extract_diagrams_screenshots(page, question_index, skill_name):
                 os.makedirs(opt_folder_path, exist_ok=True)
                 if opt_folder_id is None:
                     opt_folder_id = _create_drive_folder(opt_folder_name, DRIVE_FOLDER_ID)
-                path = os.path.join(opt_folder_path, f"{slug}_q{question_index + 1}_opt{idx}_{ts}.png")
+                path = os.path.join(opt_folder_path, f"{prefix_base}_opt{idx}.png")
                 if _screenshot_element(page, target_el, path):
                     _upload_file_to_drive(path, opt_folder_id)
                     opt_paths.append(path)
                     print(f"       [Opt{idx}] SAVED tile screenshot: {path}")
 
-    # Sorting drag-and-drop bins: find the live binsContainer (topmost y = active
-    # question), then screenshot only its direct .bin children. IXL pre-renders
-    # upcoming questions below the viewport, so a flat .binsContainer .bin query
-    # returns N×3 results; we must scope to the single live container first.
     _bin_candidates = []
     _seen_bin_coords = set()
     for _scope in (".question-and-submission-view", ".ixl-practice-crate"):
@@ -1059,7 +1225,6 @@ def extract_diagrams_screenshots(page, question_index, skill_name):
         except Exception:
             pass
 
-    # for bins- first, dropArea, last
     if _bin_candidates:
         _bin_candidates.sort(key=lambda t: t[0])
         _active_container = _bin_candidates[0][1]
@@ -1084,7 +1249,7 @@ def extract_diagrams_screenshots(page, question_index, skill_name):
                 if opt_folder_id is None:
                     opt_folder_id = _create_drive_folder(opt_folder_name, DRIVE_FOLDER_ID)
                 path = os.path.join(opt_folder_path,
-                                    f"{slug}_q{question_index + 1}_bin{b_idx + 1}_{ts}.png")
+                                    f"{prefix_base}_bin{b_idx + 1}.png")
                 if _screenshot_element(page, bin_el, path):
                     _upload_file_to_drive(path, opt_folder_id)
                     opt_paths.append(path)
@@ -1096,7 +1261,7 @@ def extract_diagrams_screenshots(page, question_index, skill_name):
     opt_url = _drive_subfolder_url(opt_folder_id) if opt_folder_id else ""
     return q_url, opt_url
 
-def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts, save_dir=None, drive_folder_id=None):
+def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, save_dir=None, drive_folder_factory=None):
     target_dir = save_dir if save_dir is not None else IMAGE_DIR
     paths      = []
     seen_boxes = []
@@ -1124,10 +1289,7 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
             el_tag = ""
 
         try:
-            # SVG <g> elements have no valid HTML bounding box — getBoundingClientRect()
-            # on a <g> returns coordinates in the SVG's internal coordinate system, not
-            # the HTML page. Walk up to the nearest <svg> ancestor which does have a
-            # proper HTML bbox and can be screenshotted correctly.
+            # <g> has no HTML bbox — getBoundingClientRect() uses SVG coordinates; use parent <svg>.
             if el_tag == "g":
                 parent_svg = element.locator("xpath=ancestor::svg[1]")
                 if parent_svg.count() > 0:
@@ -1138,9 +1300,7 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
                 if element.locator(".horizontal-cell").count() > 0:
                     element = element.locator(".horizontal-cell").first
             elif "static-cube-train" in (element.get_attribute("class") or ""):
-                # Screenshot the static-cube-train div directly — do NOT drill into children
-                # because the cube SVGs have negative margins that overflow the div bounds.
-                pass
+                pass  # capture div directly — cube SVGs overflow with negative margins
             elif element.locator(".horizontal-cell").count() > 0:
                 element = element.locator(".horizontal-cell").first
             elif element.locator(".vector-image").count() > 0:
@@ -1157,8 +1317,6 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
                   f"bb=({round(bb['x'])},{round(bb['y'])},{round(bb['width'])},{round(bb['height'])})")
             return
         try:
-            # This relurns an inline JS object matching elements's actual HTML tag names, classes etc
-            # Used to print in console about the image info
             meta = element.evaluate(
                 "el => ({tag: el.tagName, cls: el.getAttribute('class'), "
                 "role: el.getAttribute('role'), al: el.getAttribute('aria-label')})"
@@ -1166,12 +1324,14 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
         except Exception as e:
             meta = {"tag": "?", "cls": f"<eval failed: {e}>", "role": "?", "al": "?"}
         idx  = len(paths) + 1
-        path = os.path.join(target_dir, f"{prefix}_{tag}_{ts}_{idx}.png")
+        path = os.path.join(target_dir, f"{prefix}_{tag}_{idx}.png")
         if _screenshot_element(page, element, path):
             paths.append(path)
             seen_boxes.append(bb)
-            if drive_folder_id:
-                _upload_file_to_drive(path, drive_folder_id)
+            if drive_folder_factory:
+                _fid = drive_folder_factory()
+                if _fid:
+                    _upload_file_to_drive(path, _fid)
             print(f"       [{scope_label}] SAVED#{idx} layer={layer} sig={signal} "
                   f"tag={meta.get('tag')} cls={meta.get('cls')} role={meta.get('role')} "
                   f"al={meta.get('al')} "
@@ -1186,7 +1346,6 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
         bb = _safe_bbox(el)
         if bb is None:
             return False
-        # Coordinates are not (0,0), even more negative
         if bb["y"] < 0 or bb["x"] < 0:
             return False
         if bb["width"] < 1 or bb["height"] < 1:
@@ -1202,8 +1361,6 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
             return False
 
     def _is_inside_venn_diagram(el):
-        """Return True if el is a child/descendant of a venn diagram container (not the container itself).
-        Prevents individual shapes inside dragAndDropVennDiagramContainer from getting their own screenshot."""
         try:
             return el.evaluate("""el => {
                 if (el.matches('[class*="dragAndDropVennDiagramContainer"]')) return false;
@@ -1246,7 +1403,7 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
         ".horizontal-scroll-hoc-wrapper",
         ".horizontal-scroll-element-wrapper",
         ".multiplication-model-container",
-        ".fractionTopBlockDiv",
+        ".fractionBarArithmeticTable",
         ".open-number-line",
         ".dc-fraction-strip-model",
         "div.table:has([data-testid='area-model-cell'])",
@@ -1277,19 +1434,18 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
         "[class*='horizontal-scroll']",
         "[class*='dragAndDropContainer']",
         "[class*='SelectableTime']",
-        ".simple-item-table"
+        ".simple-item-table",
+        ".fill-in-section",
+        ".explLineList"
     ]
-    # These can have multiple real instances per question (e.g. two number lines for
-    # equivalence questions, or a standalone pie chart) — no phantom de-dupe applied.
+    # L1_MULTI can have multiple real instances per question — no phantom de-dupe applied.
     L1_MULTI      = [".graphingBaseContainer", ".pie-chart", ".qPVTable", ".guide-counting-clickable-image-container", "[class*='tenFrames']"]
     L1_REPEATING  = [".guide-counting-qm"]
 
     for container_sel in L1_INTEGRATED + L1_MULTI + L1_REPEATING:
         containers = get_elements(container_sel)
 
-        # For integrated single-figure diagrams in the QUESTION scope, IXL pre-renders upcoming-question copies stacked below the live one.
-        # Keep only the topmost (smallest y) — that's the active diagram.
-        # L1_MULTI types are exempt: a question may show several legitimately.
+        # IXL pre-renders upcoming questions below the viewport; keep only the topmost.
         if container_sel in L1_INTEGRATED and root_locator is None and len(containers) > 1:
             containers = sorted(
                 containers,
@@ -1311,16 +1467,21 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, ts
 
     return paths
 
-# After submission, screenshot regular diagrams in the answer box and each bin (with placed tiles) as the correct answer.
-def _screenshot_answer_diagrams(page, question_index, skill_name, ts):
+def _screenshot_answer_diagrams(page, question_index, skill_name, question_id):
     clean_skill = re.sub(r'[\\/*?:"<>|]', "", skill_name)
     slug = clean_skill.replace(" ", "_")[:40]
-    ans_folder_name = f"{slug}_q{question_index + 1}_ansdiag_{ts}"
+    prefix_base = f"{question_id}_{slug}_q{question_index + 1}"
+    ans_folder_name = f"{prefix_base}_ansdiag"
     ans_folder_path = os.path.join(IMAGE_DIR, ans_folder_name)
-    ans_folder_id = None
+    _ans_fid = [None]
+    def _ans_folder():
+        if _ans_fid[0] is None:
+            os.makedirs(ans_folder_path, exist_ok=True)
+            _ans_fid[0] = _create_drive_folder(ans_folder_name, DRIVE_FOLDER_ID)
+        return _ans_fid[0]
+
     paths = []
 
-    # 1. Extract regular diagrams inside the answer box
     try:
         answer_box = page.locator(".answer-box").first
         if answer_box.count() > 0 and answer_box.is_visible():
@@ -1348,14 +1509,12 @@ def _screenshot_answer_diagrams(page, question_index, skill_name, ts):
                             target_el = answer_box.locator(".vector-image").first
                     except Exception:
                         pass
-                    
+
                     bb = _wait_for_element_painted(target_el)
                     if bb and bb["width"] > 2 and bb["height"] > 2:
-                        os.makedirs(ans_folder_path, exist_ok=True)
-                        ans_folder_id = _create_drive_folder(ans_folder_name, DRIVE_FOLDER_ID)
-                        path = os.path.join(ans_folder_path, f"{slug}_q{question_index + 1}_ans_tile_{ts}.png")
+                        path = os.path.join(ans_folder_path, f"{prefix_base}_ans_tile.png")
                         if _screenshot_element(page, target_el, path):
-                            _upload_file_to_drive(path, ans_folder_id)
+                            _upload_file_to_drive(path, _ans_folder())
                             paths.append(path)
                             print(f"       [Ans] SAVED answer tile screenshot: {path}")
             else:
@@ -1369,23 +1528,19 @@ def _screenshot_answer_diagrams(page, question_index, skill_name, ts):
                         pass
 
                 if has_diagram:
-                    os.makedirs(ans_folder_path, exist_ok=True)
-                    ans_folder_id = _create_drive_folder(ans_folder_name, DRIVE_FOLDER_ID)
                     ans_diag_paths = _extract_from_scope(
                         page=page,
                         scope_parts=[],
                         root_locator=answer_box,
                         scope_label="Ans",
-                        prefix=f"{slug}_q{question_index + 1}_ans",
-                        ts=ts,
+                        prefix=f"{prefix_base}_ans",
                         save_dir=ans_folder_path,
-                        drive_folder_id=ans_folder_id,
+                        drive_folder_factory=_ans_folder,
                     )
                     paths.extend(ans_diag_paths)
     except Exception as e:
         print(f"     [!] answer diagram screenshot failed: {e}")
 
-    # 2. Extract answer bins
     try:
         all_candidates = []
         seen_coords = set()
@@ -1414,7 +1569,6 @@ def _screenshot_answer_diagrams(page, question_index, skill_name, ts):
 
             candidates = with_tiles if with_tiles else all_candidates
             candidates.sort(key=lambda t: t[0])
-            # selects the topmost container to take screenshot of valid image and ignore duplicates
             container = candidates[0][1]
 
             bins_to_screenshot = []
@@ -1433,26 +1587,117 @@ def _screenshot_answer_diagrams(page, question_index, skill_name, ts):
                 bb = _wait_for_element_painted(bin_el)
                 if bb is None or bb["width"] < 2 or bb["height"] < 2:
                     continue
-                os.makedirs(ans_folder_path, exist_ok=True)
-                if ans_folder_id is None:
-                    ans_folder_id = _create_drive_folder(ans_folder_name, DRIVE_FOLDER_ID)
                 path = os.path.join(ans_folder_path,
-                                    f"{slug}_q{question_index + 1}_ans_bin{b_idx + 1}_{ts}.png")
+                                    f"{prefix_base}_ans_bin{b_idx + 1}.png")
                 if _screenshot_element(page, bin_el, path):
-                    _upload_file_to_drive(path, ans_folder_id)
+                    _upload_file_to_drive(path, _ans_folder())
                     paths.append(path)
                     print(f"       [AnsBin{b_idx + 1}] SAVED answer bin: {path}")
     except Exception as e:
         print(f"     [!] answer bin screenshot failed: {e}")
 
-    return _drive_subfolder_url(ans_folder_id) if ans_folder_id else ""
+    return _drive_subfolder_url(_ans_fid[0]) if _ans_fid[0] else ""
+
+
+def _extract_expl_tab(page, tab_body_el, local_img_dir, drive_img_folder_factory, prefix):
+    js = f"el => {{ {_EXPL_WALKER_JS} walk(el); return {{ text: out, imgCount: _explImgIdx }}; }}"
+    try:
+        result = tab_body_el.evaluate(js)
+    except Exception as e:
+        print(f"     [!] Expl walker failed: {e}")
+        return ""
+
+    text = result.get('text', '') if isinstance(result, dict) else (result or '')
+    img_count = result.get('imgCount', 0) if isinstance(result, dict) else 0
+
+    for i in range(img_count):
+        marker = f'@@IMG:{i}@@'
+        try:
+            img_locator = tab_body_el.locator(f'[data-expl-img-idx="{i}"]')
+            if img_locator.count() == 0:
+                text = text.replace(marker, '[image]')
+                continue
+            img_el = img_locator.first
+            img_path = os.path.join(local_img_dir, f"{prefix}_img{i + 1}.png")
+            if _screenshot_element(page, img_el, img_path):
+                fid = drive_img_folder_factory()
+                img_url = _upload_file_to_drive_sync_return_url(img_path, fid, 'image/png') if fid else None
+                text = text.replace(marker, f'[{img_url}]' if img_url else '[image]')
+            else:
+                text = text.replace(marker, '[image]')
+        except Exception as e:
+            print(f"     [!] Expl image {i} failed: {e}")
+            text = text.replace(marker, '[image]')
+
+    text = re.sub(r'@@IMG:\d+@@', '[image]', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
+def scrape_explanation(page, question_index, skill_name, question_id):
+    try:
+        expl_box = page.locator('.explanation-box')
+        if expl_box.count() == 0:
+            return ""
+        page.wait_for_selector('.explanation-box', state='visible', timeout=5000)
+    except Exception:
+        return ""
+
+    clean_skill = re.sub(r'[\\/*?:"<>|]', "", skill_name)
+    slug = clean_skill.replace(" ", "_")[:40]
+    prefix_base = f"{question_id}_{slug}_q{question_index + 1}"
+
+    txt_name = f"{prefix_base}_explanation.txt"
+    img_folder_name = f"{prefix_base}_explimg"
+    local_dir = os.path.join(EXPL_DIR, f"{prefix_base}_expl")
+    os.makedirs(local_dir, exist_ok=True)
+
+    _expl_img_fid = [None]
+    def _expl_img_folder(_n=img_folder_name):
+        if _expl_img_fid[0] is None:
+            _expl_img_fid[0] = _create_drive_folder(_n, EXPL_IMG_DRIVE_FOLDER_ID)
+        return _expl_img_fid[0]
+
+    sections = []
+    for tab_class, label in [('remember-box', 'REMEMBER'), ('solve-box', 'SOLVE')]:
+        try:
+            tab = page.locator(f'.explanation-box .{tab_class}')
+            if tab.count() == 0:
+                continue
+            tab_body = tab.locator('.tab-body').first
+            if tab_body.count() == 0:
+                continue
+            try:
+                tab_body.wait_for(state='visible', timeout=3000)
+            except Exception:
+                continue
+            prefix = f"{prefix_base}_{label.lower()}"
+            content = _extract_expl_tab(page, tab_body, local_dir, _expl_img_folder, prefix)
+            if content.strip():
+                header = f"{label}\n{'=' * len(label)}"
+                sections.append(f"{header}\n{content}")
+        except Exception as e:
+            print(f"     [!] Expl tab {tab_class} failed: {e}")
+
+    if not sections:
+        return ""
+
+    txt_body = "\n\n".join(sections)
+    txt_path = os.path.join(local_dir, txt_name)
+    with open(txt_path, 'w', encoding='utf-8') as f:
+        f.write(txt_body)
+
+    txt_url = _upload_file_to_drive_sync_return_url(txt_path, EXPL_TXT_DRIVE_FOLDER_ID, 'text/plain')
+    print(f"       [Expl] Saved: {txt_name}")
+    return txt_url or ""
 
 
 def extract_and_advance(page, category_name, skill_name, serial_tracker):
     previous_question_text = ""
 
     for i in range(QUESTIONS_PER_SKILL):
-        print(f"  -> Processing Question {i+1}...")
+        question_id = int(time.time())
+        print(f"  -> Processing Question {i+1}... (ID: {question_id})")
 
         try:
             page.wait_for_selector(
@@ -1472,7 +1717,7 @@ def extract_and_advance(page, category_name, skill_name, serial_tracker):
 
         question_text = extract_question_text(page)
         options_text  = extract_options(page)
-        q_diagrams, opt_diagrams = extract_diagrams_screenshots(page, i, skill_name)
+        q_diagrams, opt_diagrams = extract_diagrams_screenshots(page, i, skill_name, question_id)
         previous_question_text = question_text
 
         if not question_text:
@@ -1481,14 +1726,12 @@ def extract_and_advance(page, category_name, skill_name, serial_tracker):
 
         correct_answer = ""
         try:
-            # First Submit button - for incomplete answers
             submit_btn = page.locator(
                 'button[data-cy="question-submit-button"], div.question button.submit'
             ).first
             submit_btn.wait_for(state="visible", timeout=10000)
             submit_btn.click()
 
-            # Pop-up Submit button - for incomplete answers
             popup_btn = page.locator(
                 'button[data-cy="incomplete-answer-popover-submit-button"]'
             ).first
@@ -1501,10 +1744,14 @@ def extract_and_advance(page, category_name, skill_name, serial_tracker):
         except Exception as e:
             print(f"     [!] Could not read correct answer on Q{i+1}: {e}")
 
-        ts_ans = int(time.time())
-        ans_diagrams = _screenshot_answer_diagrams(page, i, skill_name, ts_ans)
+        ans_diagrams = _screenshot_answer_diagrams(page, i, skill_name, question_id)
 
-        # row_data = columns A-E, G, I (7 values)
+        expl_url = ""
+        try:
+            expl_url = scrape_explanation(page, i, skill_name, question_id) or ""
+        except Exception as e:
+            print(f"     [!] Explanation scrape failed on Q{i+1}: {e}")
+
         row_vals = [
             serial_tracker[0] if i == 0 else "",
             category_name     if i == 0 else "",
@@ -1514,11 +1761,10 @@ def extract_and_advance(page, category_name, skill_name, serial_tracker):
             options_text,
             correct_answer
         ]
-        append_to_excel(row_vals, q_diagrams, opt_diagrams, ans_diagram_url=ans_diagrams)
+        append_to_excel(question_id, row_vals, q_diagrams, opt_diagrams, ans_diagram_url=ans_diagrams, expl_url=expl_url)
 
         if i < QUESTIONS_PER_SKILL - 1:
             try:
-                # Got it button
                 got_it_btn = page.locator(
                     'button:has-text("Got it"), .next-problem button'
                 ).first
@@ -1567,7 +1813,6 @@ def run_scraper():
     _init_drive_service()
     setup_dir()
     init_excel()
-
     with sync_playwright() as p:
         print("\nInitializing browser context...")
         browser = p.chromium.launch(headless=False)
@@ -1580,7 +1825,6 @@ def run_scraper():
         print("Authenticating...")
         page.goto(LOGIN_URL)
 
-        # Fill in credentials
         page.fill("input[type='email'], input[name='username']", EMAIL)
         page.fill("input[type='password'], input[name='password']", PASSWORD)
         page.keyboard.press("Enter")
@@ -1596,9 +1840,7 @@ def run_scraper():
         serial_tracker = [1]
 
         for cat_index in range(total_categories):
-            # Re-fetch count in case DOM changed after navigation
             current_count = page.locator("div.skill-tree-category").count()
-            
             scroll_attempts = 0
             while cat_index >= current_count and scroll_attempts < 10:
                 print(f"  [Scroll] Category index {cat_index} not in DOM (current count: {current_count}). Scrolling to load...")
@@ -1616,7 +1858,6 @@ def run_scraper():
 
             cat_block = page.locator("div.skill-tree-category").nth(cat_index)
 
-            # Scroll the category block into view to trigger lazy rendering
             try:
                 cat_block.scroll_into_view_if_needed()
                 page.wait_for_timeout(300)
@@ -1625,7 +1866,6 @@ def run_scraper():
 
             header_loc = cat_block.locator(".skill-tree-skills-header").first
             if not header_loc.is_visible():
-                # Try waiting briefly for visibility after scroll
                 try:
                     header_loc.wait_for(state="visible", timeout=3000)
                 except Exception:
@@ -1650,7 +1890,6 @@ def run_scraper():
                               if title_span.count() > 0
                               else current_skill.inner_text().strip())
 
-                # Mode 2: skip skills until we hit the START_URL
                 if not reached_start:
                     skill_href = (current_skill.get_attribute("href") or "").rstrip("/")
                     if skill_href == start_path:
@@ -1665,15 +1904,14 @@ def run_scraper():
                 current_skill.scroll_into_view_if_needed()
                 current_skill.click()
 
-                # This runs 3 times
                 extract_and_advance(page, full_category_name, skill_name, serial_tracker)
 
                 print("  -> Retreating to main directory...")
                 try:
                     breadcrumb = page.locator(
-                        'a.breadcrumb-link:has-text("Third grade"), '
-                        'a.breadcrumb-link[href="/math/grade-3"], '
-                        'a.breadcrumb-link[href="/maths/class-iii"]'
+                        'a.breadcrumb-link:has-text("Fifth grade"), '
+                        'a.breadcrumb-link[href="/math/grade-5"], '
+                        'a.breadcrumb-link[href="/maths/class-v"]'
                     ).first
                     breadcrumb.wait_for(state="visible", timeout=10000)
                     breadcrumb.click()
