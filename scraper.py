@@ -16,12 +16,12 @@ from googleapiclient.http import MediaFileUpload
 
 TARGET_URL = "https://www.ixl.com/math/grade-5"
 LOGIN_URL = "https://in.ixl.com/signin"
-EMAIL = os.getenv("IXL_EMAIL", "")
-PASSWORD = os.getenv("IXL_PASSWORD", "")
+EMAIL = "parkerhouston411@kacad"
+PASSWORD = "81party"
 QUESTIONS_PER_SKILL = 3
 EXCEL_FILENAME = "ixl_grade5_questions[test].xlsx"
 IMAGE_DIR = "ixl_diagrams"
-DRIVE_FOLDER_ID = "1-S1b8hdNe2m6XndIj1bxB1OQ44XgvUzR"
+DRIVE_FOLDER_ID = "1ki6EL5fT0kTzEaSAUXMsn6bSCnXSH4do"
 EXPL_DIR = "ixl_explanations"
 EXPL_TXT_DRIVE_FOLDER_ID = "1v9TZbWhPxwE6iu2MdIVi46w-NshMXLoI"
 EXPL_IMG_DRIVE_FOLDER_ID = "1W75WZ5b-LDWVi3depGmUM-eyEnPoKN8V"
@@ -29,7 +29,7 @@ SCOPES = ['https://www.googleapis.com/auth/drive']
 CLIENT_SECRET_FILE = "client_secret.json"
 TOKEN_FILE = "token.json"
 
-START_URL = "https://www.ixl.com/math/grade-5/identify-mistakes-involving-the-order-of-operations"
+START_URL = "https://www.ixl.com/math/grade-5/describe-the-coordinate-plane"
 THIN = Side(style="thin", color="D9D9D9")
 BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
@@ -66,6 +66,8 @@ DIAGRAM_SIGNALS = [
     ".calendar-container",
     ".diagramLabelContainer",
     ".QMMeasurable",
+    ".selectableGridContainer",
+    ".diagramWrapper",
     "[class*='tenFrames']",
     "[class*='series-of-components']",
     "[class*='qTable']",
@@ -79,7 +81,13 @@ DIAGRAM_SIGNALS = [
     "[class*='SelectableTime']",
     ".simple-item-table",
     ".fill-in-section",
-    ".explLineList"
+    ".explLineList",
+    ".old-space-indent",
+    ".partial-quotients",
+    ".line-plot-container",
+    ".stem-and-leaf-plot",
+    ".canvas-container-div",
+    ".paystub-table"
 ]
 
 Q_SCOPE_PARTS = [
@@ -180,7 +188,7 @@ def init_excel():
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         cell.border = BORDER
 
-    widths = {"A": 8, "B": 6, "C": 30, "D": 45, "E": 12,
+    widths = {"A": 15, "B": 6, "C": 30, "D": 45, "E": 12,
               "F": 70, "G": 50, "H": 35, "I": 50, "J": 35, "K": 55, "L": 55}
     for col, w in widths.items():
         ws.column_dimensions[col].width = w
@@ -202,27 +210,26 @@ def append_to_excel(question_id, row_data, q_diagram_url, opt_diagram_url, ans_d
             return ILLEGAL_CHARACTERS_RE.sub('', str(s))
 
         text_columns = {
-            1: (question_id, None),
-            2: (_clean_str(row_data[0]), None),
-            3: (_clean_str(row_data[1]), None),
-            4: (_clean_str(row_data[2]), None),
-            5: (_clean_str(row_data[3]), None),
-            6: (_clean_str(row_data[4]), None),
-            7: (_clean_str(q_diagram_url), _clean_str(q_diagram_url) if q_diagram_url else None),
-            8: (_clean_str(row_data[5]), None),
-            9: (_clean_str(opt_diagram_url), _clean_str(opt_diagram_url) if opt_diagram_url else None),
-            10: (_clean_str(row_data[6]), None),
-            11: (_clean_str(ans_diagram_url) if ans_diagram_url else "",
-                 _clean_str(ans_diagram_url) if ans_diagram_url else None),
-            12: (_clean_str(expl_url) if expl_url else "",
-                 _clean_str(expl_url) if expl_url else None),
+            1: question_id,
+            2: _clean_str(row_data[0]),
+            3: _clean_str(row_data[1]),
+            4: _clean_str(row_data[2]),
+            5: _clean_str(row_data[3]),
+            6: _clean_str(row_data[4]),
+            7: _clean_str(q_diagram_url),
+            8: _clean_str(row_data[5]),
+            9: _clean_str(opt_diagram_url),
+            10: _clean_str(row_data[6]),
+            11: _clean_str(ans_diagram_url) if ans_diagram_url else "",
+            12: _clean_str(expl_url) if expl_url else "",
         }
 
-        for col_idx, (value, h_link) in text_columns.items():
+        link_font = Font(name="Calibri", size=11, color="0563C1", underline="single")
+        for col_idx, value in text_columns.items():
             cell = ws.cell(row=current_row, column=col_idx, value=value)
-            if h_link and h_link.startswith("http"):
-                cell.hyperlink = h_link
-                cell.font = Font(name="Calibri", size=11, color="0563C1", underline="single")
+            if isinstance(value, str) and value.startswith("http"):
+                cell.hyperlink = value
+                cell.font = link_font
             else:
                 cell.font = cell_font
             cell.border = BORDER
@@ -255,7 +262,9 @@ _MATH_WALKER_JS = """
         'simple-item-table', 'expression-tile-bank', 'expression-tile-parking-space', 'expression-tile',
         'train-and-item-group', 'train-and-element-group', 'measurementRegion',
         'calendar-container', 'diagramLabelContainer', 'QMMeasurable',
-        'responsive-old-list-in-columns', 'enclosedTextArea', 'fill-in-section'
+        'selectableGridContainer', 'diagramWrapper', 'fill-in-section',
+        'QMRecipes', 'partial-quotients',
+        'line-plot-container', 'stem-and-leaf-plot', 'paystub-table'
     ];
     const isDiagramTableOrElement = (el) => {
         if (!el.classList) return false;
@@ -279,8 +288,30 @@ _MATH_WALKER_JS = """
                 // --- Math-expression checks FIRST (before diagram-class skip) ---
                 if (tag === 'input' && child.classList.contains('fillIn')) {
                     out += '_';
+                } else if (child.classList && child.classList.contains('unknownSymText')) {
+                    out += '__';
+                } else if (child.classList && child.classList.contains('wholeExp')) {
+                    const _expSaved = out;
+                    out = '';
+                    const _baseEl = child.querySelector('.base');
+                    if (_baseEl) walk(_baseEl);
+                    const _baseTxt = out.trim() || '?';
+                    out = '';
+                    const _expEl = child.querySelector('.exponent');
+                    if (_expEl) walk(_expEl);
+                    const _expTxt = out.trim() || '?';
+                    out = _expSaved + _baseTxt + '^' + _expTxt;
                 } else if (tag === 'div' && child.classList && child.classList.contains('drop-slot')) {
                     out += '_';
+                } else if (tag === 'div' && child.classList && child.classList.contains('drop-down-choice-list')) {
+                    continue;
+                } else if (child.classList && child.classList.contains('drop-down-container')) {
+                    const activeChoice = child.querySelector('.active-choice');
+                    if (activeChoice) {
+                        out += activeChoice.getAttribute('aria-label') || activeChoice.innerText.trim();
+                    } else {
+                        out += '____';
+                    }
                 } else if (tag === 'table' && child.hasAttribute('audioalt')) {
                     // Old-style fraction table on option tiles: <table audioalt="2/3">
                     out += child.getAttribute('audioalt');
@@ -304,7 +335,7 @@ _MATH_WALKER_JS = """
                         const rows = tbl.querySelectorAll('tr');
                         const num = rows.length > 0 ? rows[0].textContent.trim() : '?';
                         const den = rows.length > 1 ? rows[1].textContent.trim() : '?';
-                        out += '( ' + num + ' ) / ( ' + den + ' )';
+                        out += '(' + num + '/' + den + ')';
                     }
                 } else if (child.classList && child.classList.contains('vFrac')) {
                     const _savedOut = out;
@@ -316,7 +347,11 @@ _MATH_WALKER_JS = """
                     const denEl = child.querySelector('.denominator');
                     if (denEl) walk(denEl);
                     const denText = out.trim() || '?';
-                    out = _savedOut + '( ' + numText + ' ) / ( ' + denText + ' )';
+                    if (numText === '_' && denText === '_') {
+                        out = _savedOut + '_/_';
+                    } else {
+                        out = _savedOut + '(' + numText + '/' + denText + ')';
+                    }
                 } else if (child.classList && child.classList.contains('vertArith')) {
                     const rows = [...child.querySelectorAll('.vertArithRow')];
                     const operands = [];
@@ -410,6 +445,66 @@ _MATH_WALKER_JS = """
                         }
                     }
                     if (parts.length) out += parts.join(' ');
+                } else if (child.classList && child.classList.contains('old-space-indent')) {
+                    // price-lists-ii: table is screenshotted; walk to emit only the "$_" answer
+                    // (the inner price-list <table> is skipped as a diagram class).
+                    if (child.querySelector('.price-lists-ii')) { walk(child); continue; }
+                    if (!child.querySelector('td.old-fraction')) { continue; }
+                    const _osSaved = out;
+                    out = '';
+                    const _extractOldFrac = (tbl) => {
+                        const trs = tbl ? [...tbl.querySelectorAll(':scope > tbody > tr, :scope > tr')] : [];
+                        const numEl = trs[0], denEl = trs[1];
+                        const numFi = numEl ? numEl.querySelector('input.fillIn') : null;
+                        const denFi = denEl ? denEl.querySelector('input.fillIn') : null;
+                        const num = numFi ? '_' : (numEl ? numEl.textContent.trim() : '?');
+                        const den = denFi ? '_' : (denEl ? denEl.textContent.trim() : '?');
+                        return num + '/' + den;
+                    };
+                    const _osParts = [];
+                    let _osSkipNext = false;
+                    const _processOsRow = (tr) => {
+                        const tds = [...tr.children].filter(c => c.tagName === 'TD');
+                        for (let i = 0; i < tds.length; i++) {
+                            if (_osSkipNext) { _osSkipNext = false; continue; }
+                            const td = tds[i];
+                            const nextTd = tds[i + 1];
+                            const nextFracTbl = nextTd ? nextTd.querySelector('table') : null;
+                            if (nextFracTbl && nextFracTbl.querySelector('td.old-fraction')) {
+                                const whole = td.textContent.trim().replace(/\\u00a0/g, '').trim();
+                                if (whole && /^\\d+$/.test(whole)) {
+                                    _osParts.push('(' + whole + '+' + _extractOldFrac(nextFracTbl) + ')');
+                                    _osSkipNext = true;
+                                    continue;
+                                }
+                            }
+                            const directFracTbl = td.querySelector(':scope > table');
+                            if (directFracTbl && directFracTbl.querySelector('td.old-fraction')) {
+                                const f = _extractOldFrac(directFracTbl);
+                                _osParts.push(f === '_/_' ? '_/_' : '(' + f + ')');
+                                continue;
+                            }
+                            if (directFracTbl) {
+                                const innerRows = [...directFracTbl.querySelectorAll(':scope > tbody > tr, :scope > tr')];
+                                for (const r of innerRows) _processOsRow(r);
+                                continue;
+                            }
+                            if (td.querySelector('input.fillIn')) { _osParts.push('_'); continue; }
+                            const txt = td.textContent.trim().replace(/\\u00a0/g, '').replace(/\\s+/g, ' ');
+                            if (txt) _osParts.push(txt);
+                        }
+                    };
+                    const _osOuterTbl = child.querySelector(':scope > table');
+                    if (_osOuterTbl) {
+                        const _osRows = [..._osOuterTbl.querySelectorAll(':scope > tbody > tr, :scope > tr')];
+                        for (const r of _osRows) _processOsRow(r);
+                    }
+                    out = _osSaved + _osParts.filter(p => p && p.trim()).join(' ');
+                } else if (child.classList && child.classList.contains('responsive-old-list-in-columns')) {
+                    // Scrape as text (not a screenshot), each value space-separated.
+                    const _rolCells = [...child.querySelectorAll('.responsive-old-list-in-columns-cell')];
+                    const _rolVals = _rolCells.map(c => c.textContent.trim().replace(/\\s+/g, ' ')).filter(v => v);
+                    out += ' ' + _rolVals.join(' ') + ' ';
                 // --- NOW skip diagram containers (after all math checks) ---
                 } else if (isDiagramTableOrElement(child)) {
                     continue;
@@ -432,7 +527,9 @@ _EXPL_WALKER_JS = """
         'simple-item-table', 'expression-tile-bank', 'expression-tile-parking-space', 'expression-tile',
         'train-and-item-group', 'train-and-element-group', 'measurementRegion',
         'calendar-container', 'diagramLabelContainer', 'QMMeasurable',
-        'responsive-old-list-in-columns', 'enclosedTextArea', 'fill-in-section'
+        'selectableGridContainer', 'diagramWrapper', 'fill-in-section',
+        'QMRecipes', 'partial-quotients',
+        'line-plot-container', 'stem-and-leaf-plot', 'paystub-table'
     ];
     const isDiagramTableOrElement = (el) => {
         if (!el.classList) return false;
@@ -466,8 +563,30 @@ _EXPL_WALKER_JS = """
                 // --- Math-expression checks FIRST ---
                 if (tag === 'input' && child.classList.contains('fillIn')) {
                     out += '_';
+                } else if (child.classList && child.classList.contains('unknownSymText')) {
+                    out += '__';
+                } else if (child.classList && child.classList.contains('wholeExp')) {
+                    const _expSaved = out;
+                    out = '';
+                    const _baseEl = child.querySelector('.base');
+                    if (_baseEl) walk(_baseEl);
+                    const _baseTxt = out.trim() || '?';
+                    out = '';
+                    const _expEl = child.querySelector('.exponent');
+                    if (_expEl) walk(_expEl);
+                    const _expTxt = out.trim() || '?';
+                    out = _expSaved + _baseTxt + '^' + _expTxt;
                 } else if (tag === 'div' && child.classList && child.classList.contains('drop-slot')) {
                     out += '_';
+                } else if (tag === 'div' && child.classList && child.classList.contains('drop-down-choice-list')) {
+                    continue;
+                } else if (child.classList && child.classList.contains('drop-down-container')) {
+                    const activeChoice = child.querySelector('.active-choice');
+                    if (activeChoice) {
+                        out += activeChoice.getAttribute('aria-label') || activeChoice.innerText.trim();
+                    } else {
+                        out += '____';
+                    }
                 } else if (tag === 'table' && child.hasAttribute('audioalt')) {
                     out += child.getAttribute('audioalt');
                 } else if (child.classList && child.classList.contains('old-fraction-in-text')) {
@@ -488,7 +607,7 @@ _EXPL_WALKER_JS = """
                         const rows = tbl.querySelectorAll('tr');
                         const num = rows.length > 0 ? rows[0].textContent.trim() : '?';
                         const den = rows.length > 1 ? rows[1].textContent.trim() : '?';
-                        out += '( ' + num + ' ) / ( ' + den + ' )';
+                        out += '(' + num + '/' + den + ')';
                     }
                 } else if (child.classList && child.classList.contains('vFrac')) {
                     const _savedOut = out;
@@ -500,7 +619,11 @@ _EXPL_WALKER_JS = """
                     const denEl = child.querySelector('.denominator');
                     if (denEl) walk(denEl);
                     const denText = out.trim() || '?';
-                    out = _savedOut + '( ' + numText + ' ) / ( ' + denText + ' )';
+                    if (numText === '_' && denText === '_') {
+                        out = _savedOut + '_/_';
+                    } else {
+                        out = _savedOut + '(' + numText + '/' + denText + ')';
+                    }
                 } else if (child.classList && child.classList.contains('vertArith')) {
                     const rows = [...child.querySelectorAll('.vertArithRow')];
                     const operands = [];
@@ -582,11 +705,68 @@ _EXPL_WALKER_JS = """
                         }
                     }
                     if (parts.length) out += parts.join(' ');
-                // explLineList: step-by-step equation table — screenshot as diagram
+                // explLineList: screenshot as diagram, emit URL placeholder
                 } else if (child.classList && child.classList.contains('explLineList')) {
                     child.setAttribute('data-expl-img-idx', String(_explImgIdx));
                     out += '@@IMG:' + _explImgIdx + '@@';
                     _explImgIdx++;
+                } else if (child.classList && child.classList.contains('old-space-indent')) {
+                    if (!child.querySelector('td.old-fraction')) {
+                        child.setAttribute('data-expl-img-idx', String(_explImgIdx));
+                        out += '@@IMG:' + _explImgIdx + '@@';
+                        _explImgIdx++;
+                    } else {
+                        const _osSaved2 = out;
+                        out = '';
+                        const _extractOldFrac2 = (tbl) => {
+                            const trs = tbl ? [...tbl.querySelectorAll(':scope > tbody > tr, :scope > tr')] : [];
+                            const numEl = trs[0], denEl = trs[1];
+                            const numFi = numEl ? numEl.querySelector('input.fillIn') : null;
+                            const denFi = denEl ? denEl.querySelector('input.fillIn') : null;
+                            const num = numFi ? '_' : (numEl ? numEl.textContent.trim() : '?');
+                            const den = denFi ? '_' : (denEl ? denEl.textContent.trim() : '?');
+                            return num + '/' + den;
+                        };
+                        const _osParts2 = [];
+                        let _osSkipNext2 = false;
+                        const _processOsRow2 = (tr) => {
+                            const tds = [...tr.children].filter(c => c.tagName === 'TD');
+                            for (let i = 0; i < tds.length; i++) {
+                                if (_osSkipNext2) { _osSkipNext2 = false; continue; }
+                                const td = tds[i];
+                                const nextTd = tds[i + 1];
+                                const nextFracTbl = nextTd ? nextTd.querySelector('table') : null;
+                                if (nextFracTbl && nextFracTbl.querySelector('td.old-fraction')) {
+                                    const whole = td.textContent.trim().replace(/\\u00a0/g, '').trim();
+                                    if (whole && /^\\d+$/.test(whole)) {
+                                        _osParts2.push('(' + whole + '+' + _extractOldFrac2(nextFracTbl) + ')');
+                                        _osSkipNext2 = true;
+                                        continue;
+                                    }
+                                }
+                                const directFracTbl = td.querySelector(':scope > table');
+                                if (directFracTbl && directFracTbl.querySelector('td.old-fraction')) {
+                                    const f = _extractOldFrac2(directFracTbl);
+                                    _osParts2.push(f === '_/_' ? '_/_' : '(' + f + ')');
+                                    continue;
+                                }
+                                if (directFracTbl) {
+                                    const innerRows = [...directFracTbl.querySelectorAll(':scope > tbody > tr, :scope > tr')];
+                                    for (const r of innerRows) _processOsRow2(r);
+                                    continue;
+                                }
+                                if (td.querySelector('input.fillIn')) { _osParts2.push('_'); continue; }
+                                const txt = td.textContent.trim().replace(/\\u00a0/g, '').replace(/\\s+/g, ' ');
+                                if (txt) _osParts2.push(txt);
+                            }
+                        };
+                        const _osOuterTbl2 = child.querySelector(':scope > table');
+                        if (_osOuterTbl2) {
+                            const _osRows2 = [..._osOuterTbl2.querySelectorAll(':scope > tbody > tr, :scope > tr')];
+                            for (const r of _osRows2) _processOsRow2(r);
+                        }
+                        out = _osSaved2 + _osParts2.filter(p => p && p.trim()).join(' ');
+                    }
                 // Solve step rows: recurse then newline
                 } else if (child.classList && child.classList.contains('row')) {
                     walk(child);
@@ -615,6 +795,29 @@ _EXPL_WALKER_JS = """
                         const itemText = out.trim();
                         out = _savedOut + '\\n\\u2022 ' + itemText;
                     });
+                // Line break → newline
+                } else if (tag === 'br') {
+                    out += '\\n';
+                // Table rows → content then newline (each row on its own line)
+                } else if (tag === 'tr') {
+                    walk(child);
+                    out += '\\n';
+                // Bold text → markdown **bold**
+                } else if (tag === 'b' || tag === 'strong') {
+                    const _boldSaved = out;
+                    out = '';
+                    walk(child);
+                    const _boldText = out.trim();
+                    out = _boldSaved + (_boldText ? '**' + _boldText + '**' : '');
+                // Hyperlinks: walk inner text then pad with 4 spaces (non-clickable separator)
+                } else if (tag === 'a') {
+                    walk(child);
+                    out += '    ';
+                } else if (child.classList && child.classList.contains('responsive-old-list-in-columns')) {
+                    // Scrape as text (not a screenshot), each value space-separated.
+                    const _rolCells = [...child.querySelectorAll('.responsive-old-list-in-columns-cell')];
+                    const _rolVals = _rolCells.map(c => c.textContent.trim().replace(/\\s+/g, ' ')).filter(v => v);
+                    out += ' ' + _rolVals.join(' ') + ' ';
                 // Diagram: tag with index, emit placeholder
                 } else if (isDiagramTableOrElement(child)) {
                     child.setAttribute('data-expl-img-idx', String(_explImgIdx));
@@ -766,6 +969,23 @@ def extract_options(page, root_locator=None):
         return null;
     }"""
 
+    # Order-items drag-ordering questions: fraction/number tiles in .order-items-container
+    if root_locator is not None:
+        order_tiles = root_locator.locator(".order-items-item .draggableExpressionContainer").all()
+    else:
+        order_tiles = page.locator(
+            ".question-and-submission-view .order-items-item .draggableExpressionContainer, "
+            ".ixl-practice-crate .order-items-item .draggableExpressionContainer"
+        ).all()
+    for tile in order_tiles:
+        try:
+            label = tile.evaluate(_walker_js) or ""
+            clean_label = " ".join(label.replace("\n", " ").split())
+            if clean_label and clean_label.lower().rstrip(",.!") not in ("options", "option"):
+                options.append(clean_label)
+        except Exception:
+            continue
+
     for tile in tiles:
         try:
             exp_label = tile.evaluate(_exp_js)
@@ -897,15 +1117,53 @@ def extract_options(page, root_locator=None):
             if lines:
                 options.append("\n".join(lines))
 
+    # Dropdown questions: collect options from all .drop-down-container hiding-boxes
+    if not options:
+        if root_locator is not None:
+            dd_containers = root_locator.locator(".drop-down-container").all()
+        else:
+            dd_containers = page.locator(
+                ".question-and-submission-view .drop-down-container, "
+                ".ixl-practice-crate .drop-down-container"
+            ).all()
+        for container in dd_containers:
+            try:
+                hiding_box = container.locator(".hiding-box").first
+                if hiding_box.count() == 0:
+                    continue
+                choices = hiding_box.locator(".drop-down-choice").all()
+                for choice in choices:
+                    label = choice.get_attribute("aria-label") or choice.inner_text().strip()
+                    label = " ".join(label.replace("\n", " ").split())
+                    if label:
+                        options.append(label)
+            except Exception:
+                continue
+
     seen, unique = set(), []
     for o in options:
         if o not in seen:
             seen.add(o)
             unique.append(o)
-    return "\n".join(unique)
+    if not unique:
+        return ""
+    return "\n".join(f"{i + 1}. {o}" for i, o in enumerate(unique))
 
 
 def extract_correct_answer(page):
+    # Strategy: dropdown correct answer — reconstruct sentence from .correct-answer scope
+    try:
+        corr_wrapper = page.locator(".correct-answer .math-paragraph-completion-wrapper").first
+        if corr_wrapper.count() == 0:
+            corr_wrapper = page.locator(".correct-answer .ixlParagraph").first
+        if corr_wrapper.count() > 0:
+            walker_js = f"el => {{ {_MATH_WALKER_JS} walk(el); return out.trim(); }}"
+            val = corr_wrapper.evaluate(walker_js)
+            if val and val.strip():
+                return " ".join(val.replace("\n", " ").split())
+    except Exception:
+        pass
+
     try:
         if page.locator(".react-gc-number-button-grid").count() > 0:
             containers = page.locator(".react-gc-number-button-grid .number-button-container").all()
@@ -1039,6 +1297,9 @@ def _screenshot_element(page, element, path):
         page.wait_for_timeout(300)
         # page.screenshot(clip=...) needs viewport-relative coords; element.screenshot()
         # misaligns when visual content overflows the layout bbox (e.g. SVG negative margins).
+        # Scroll into view first so the element's bottom doesn't fall outside the viewport,
+        # which would cause h = min(vh - y, ...) to clip the screenshot (e.g. x-axis cut off).
+        element.scroll_into_view_if_needed()
         bb = element.bounding_box()
         if bb is None:
             return False
@@ -1055,6 +1316,27 @@ def _screenshot_element(page, element, path):
     except Exception as e:
         print(f"     [!] screenshot failed ({path}): {e}")
         return False
+
+
+def _resolve_diagram_wrapper_target(element):
+    return element
+    # try:
+    #     cls = element.get_attribute("class") or ""
+    #     if "diagramWrapper" not in cls.split():
+    #         return element
+    #     extra = [c for c in cls.split() if c and c != "diagramWrapper"]
+    #     if extra:
+    #         return element
+    #     widget = element.locator(
+    #         "xpath=./div[contains(concat(' ', normalize-space(@class), ' '), ' diagramLabelContainer ')]"
+    #         "/*[1][contains(concat(' ', normalize-space(@class), ' '), ' yui3-widget ')]"
+    #     )
+    #     if widget.count() > 0:
+    #         return widget.first
+    # except Exception:
+    #     pass
+    # return element
+
 
 def _collect_units_from_container(container, scope_label):
     for sel in (
@@ -1159,6 +1441,19 @@ def extract_diagrams_screenshots(page, question_index, skill_name, question_id):
                     break
             except Exception:
                 pass
+
+        # If secContent has no diagram, check the full active question scope for
+        # any diagram signal that sits outside secContent in IXL's DOM
+        # (e.g. area-model tables, selectableGridContainer, etc.).
+        if not has_diagram and active_content is not _active_q:
+            for _sig in DIAGRAM_SIGNALS:
+                try:
+                    if _active_q.locator(_sig).count() > 0:
+                        has_diagram = True
+                        active_content = _active_q
+                        break
+                except Exception:
+                    pass
 
         if has_diagram:
             os.makedirs(q_folder_path, exist_ok=True)
@@ -1294,6 +1589,16 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, sa
                 parent_svg = element.locator("xpath=ancestor::svg[1]")
                 if parent_svg.count() > 0:
                     element = parent_svg.first
+            elif "horizontal-scroll-element-wrapper" in (element.get_attribute("class") or ""):
+                inner = element.locator(".diagramWrapper")
+                if inner.count() > 0:
+                    element = inner.first
+            elif "diagramWrapper" in (element.get_attribute("class") or "").split():
+                element = _resolve_diagram_wrapper_target(element)
+            elif element.locator(".price-lists-ii table").count() > 0:
+                # capture only the price-list table; the "$_" answer input below it
+                # is excluded from the screenshot and emitted as text instead.
+                element = element.locator(".price-lists-ii table").first
             elif element.locator(".standalone-cube-train-wrapper .horizontal-cell").count() > 0:
                 element = element.locator(".standalone-cube-train-wrapper .horizontal-cell").first
             elif "standalone-cube-train-wrapper" in (element.get_attribute("class") or ""):
@@ -1395,7 +1700,19 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, sa
                     pass
             return results
 
+    # L0_MULTI: parent containers that hold multiple diagram children — captured FIRST so
+    # the child elements they contain get skipped by the already_captured() containment check
+    # when L1_INTEGRATED runs. No phantom de-dupe applied (multiple real instances expected).
+    L0_MULTI = [
+        ".QMHorizontalList .horListCell",
+    ]
+
     L1_INTEGRATED = [
+        # New top-level containers captured first so their inner diagrams (canvas,
+        # svg marks, diagramWrapper) are dropped by the containment de-dupe.
+        ".line-plot-container",
+        ".stem-and-leaf-plot",
+        ".paystub-table",
         # Series-of-components MUST come before vector-image-wrapper so the whole
         # row (both image groups side-by-side) is captured as one unit and each
         # individual vector-image-wrapper inside gets dropped by the containment check.
@@ -1407,10 +1724,13 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, sa
         ".open-number-line",
         ".dc-fraction-strip-model",
         "div.table:has([data-testid='area-model-cell'])",
+        ".partial-quotients",
         "table.old-table",
         "table.qTabularGrid",
         "svg:has(g.grid-region)",
         ".gc-cut-shapes",
+        ".old-space-indent",
+        ".canvas-container-div",
         "canvas",
         '[role="figure"]',
         ".shape",
@@ -1423,6 +1743,8 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, sa
         ".train-and-element-group",
         ".measurementRegion",
         ".calendar-container",
+        ".selectableGridContainer",
+        ".diagramWrapper",
         ".diagramLabelContainer",
         ".QMMeasurable",
         "[class*='story-book']",
@@ -1436,14 +1758,31 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, sa
         "[class*='SelectableTime']",
         ".simple-item-table",
         ".fill-in-section",
-        ".explLineList"
+        ".QMRecipes",
+        ".explLineList",
     ]
     # L1_MULTI can have multiple real instances per question — no phantom de-dupe applied.
     L1_MULTI      = [".graphingBaseContainer", ".pie-chart", ".qPVTable", ".guide-counting-clickable-image-container", "[class*='tenFrames']"]
     L1_REPEATING  = [".guide-counting-qm"]
 
-    for container_sel in L1_INTEGRATED + L1_MULTI + L1_REPEATING:
+    for container_sel in L0_MULTI + L1_INTEGRATED + L1_MULTI + L1_REPEATING:
         containers = get_elements(container_sel)
+
+        # A diagramLabelContainer inside a diagramWrapper is handled by the wrapper's
+        # own target logic (#7); skip it here to avoid a redundant second capture.
+        if container_sel == ".diagramLabelContainer":
+            containers = [
+                c for c in containers
+                if not c.evaluate("el => el.closest('.diagramWrapper') !== null")
+            ]
+
+        # .shape divs are placed inside diagramLabel > gridLabel inside diagramWrapper;
+        # the whole wrapper screenshot already includes them — skip to avoid a separate capture.
+        if container_sel == ".shape":
+            containers = [
+                c for c in containers
+                if not c.evaluate("el => el.closest('.diagramWrapper') !== null")
+            ]
 
         # IXL pre-renders upcoming questions below the viewport; keep only the topmost.
         if container_sel in L1_INTEGRATED and root_locator is None and len(containers) > 1:
@@ -1458,7 +1797,7 @@ def _extract_from_scope(page, scope_parts, root_locator, scope_label, prefix, sa
             bb_container = _safe_bbox(container)
             if already_captured(bb_container):
                 continue
-            if container_sel in L1_INTEGRATED or container_sel in L1_MULTI:
+            if container_sel in L0_MULTI or container_sel in L1_INTEGRATED or container_sel in L1_MULTI:
                 do_screenshot(container, "fig", layer="L1-int", signal=container_sel)
             else:
                 units = _collect_units_from_container(container, scope_label)
@@ -1618,11 +1957,16 @@ def _extract_expl_tab(page, tab_body_el, local_img_dir, drive_img_folder_factory
                 text = text.replace(marker, '[image]')
                 continue
             img_el = img_locator.first
+            img_el = _resolve_diagram_wrapper_target(img_el)
             img_path = os.path.join(local_img_dir, f"{prefix}_img{i + 1}.png")
+            try:
+                img_el.scroll_into_view_if_needed(timeout=2000)
+            except Exception:
+                pass
             if _screenshot_element(page, img_el, img_path):
                 fid = drive_img_folder_factory()
                 img_url = _upload_file_to_drive_sync_return_url(img_path, fid, 'image/png') if fid else None
-                text = text.replace(marker, f'[{img_url}]' if img_url else '[image]')
+                text = text.replace(marker, f'<{img_url}>' if img_url else '[image]')
             else:
                 text = text.replace(marker, '[image]')
         except Exception as e:
@@ -1630,6 +1974,7 @@ def _extract_expl_tab(page, tab_body_el, local_img_dir, drive_img_folder_factory
             text = text.replace(marker, '[image]')
 
     text = re.sub(r'@@IMG:\d+@@', '[image]', text)
+    text = text.replace(' ', ' ')
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
@@ -1647,7 +1992,7 @@ def scrape_explanation(page, question_index, skill_name, question_id):
     slug = clean_skill.replace(" ", "_")[:40]
     prefix_base = f"{question_id}_{slug}_q{question_index + 1}"
 
-    txt_name = f"{prefix_base}_explanation.txt"
+    txt_name = f"{prefix_base}_explanation.md"
     img_folder_name = f"{prefix_base}_explimg"
     local_dir = os.path.join(EXPL_DIR, f"{prefix_base}_expl")
     os.makedirs(local_dir, exist_ok=True)
@@ -1674,8 +2019,8 @@ def scrape_explanation(page, question_index, skill_name, question_id):
             prefix = f"{prefix_base}_{label.lower()}"
             content = _extract_expl_tab(page, tab_body, local_dir, _expl_img_folder, prefix)
             if content.strip():
-                header = f"{label}\n{'=' * len(label)}"
-                sections.append(f"{header}\n{content}")
+                header = f"## {label}"
+                sections.append(f"{header}\n\n{content}")
         except Exception as e:
             print(f"     [!] Expl tab {tab_class} failed: {e}")
 
@@ -1687,7 +2032,7 @@ def scrape_explanation(page, question_index, skill_name, question_id):
     with open(txt_path, 'w', encoding='utf-8') as f:
         f.write(txt_body)
 
-    txt_url = _upload_file_to_drive_sync_return_url(txt_path, EXPL_TXT_DRIVE_FOLDER_ID, 'text/plain')
+    txt_url = _upload_file_to_drive_sync_return_url(txt_path, EXPL_TXT_DRIVE_FOLDER_ID, 'text/markdown')
     print(f"       [Expl] Saved: {txt_name}")
     return txt_url or ""
 
