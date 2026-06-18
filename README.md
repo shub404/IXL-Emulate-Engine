@@ -8,9 +8,9 @@
 
 ## Overview
 
-This project was built during a summer research internship at **IIT Madras**. The objective was to collect a structured dataset of math questions from IXL's Grades 1–5 curriculum — including question text, answer options, correct answers, visual diagrams, and step-by-step explanations — to support later research on teacher-style spoken narration of mathematics.
+This project was built during a summer research internship at **IIT Madras**. The objective was to collect a structured dataset of math questions from IXL's Grades 1–5 curriculum - including question text, answer options, correct answers, visual diagrams, and step-by-step explanations - to support later research on teacher-style spoken narration of mathematics.
 
-IXL is a dynamically rendered SPA that actively resists automated access. The main technical challenge was extracting content that varies significantly in format — some questions are plain text, some involve fractions or vertical arithmetic, and many include visual diagrams (number lines, fraction bars, pie charts, coordinate planes, etc.) that cannot be captured through text extraction alone.
+IXL is a dynamically rendered SPA that actively resists automated access. The main technical challenge was extracting content that varies significantly in format - some questions are plain text, some involve fractions or vertical arithmetic, and many include visual diagrams (number lines, fraction bars, pie charts, coordinate planes, etc.) that cannot be captured through text extraction alone.
 
 The scraper handles all of this in a single file and saves results to:
 
@@ -45,15 +45,15 @@ Structured dataset for educational research
 
 ## Challenges Solved
 
-- **Dynamically rendered content** — IXL loads questions via JavaScript without page refreshes; a DOM stabilization check polls until the new question is confirmed loaded before extraction starts
-- **Math-specific text formats** — fractions, vertical arithmetic, fill-in-the-blank inputs, and Unicode symbols (×, ÷, –) all needed special handling in the text extractor
-- **Visual diagrams alongside text** — 50+ distinct diagram types (number lines, pie charts, area models, Venn diagrams, cube trains, calendars, etc.) needed to be detected and screenshotted separately from the question text
-- **Pre-rendered phantom elements** — IXL renders upcoming questions below the viewport; the scraper had to identify and extract only the topmost (currently active) question
-- **Multiple question formats** — each extraction function (question text, options, correct answer) has 3–4 independent methods tried in order, so an unexpected format falls through to the next method rather than failing silently
-- **Session integrity** — navigating via breadcrumbs instead of direct URLs preserves the session state and avoids anti-bot redirects
-- **Concurrent uploads without blocking** — diagram screenshots are uploaded to Google Drive in background threads so scraping continues without waiting for each upload
-- **Resumable scraping** — if a run is interrupted, Mode 2 lets you resume from any specific skill URL without re-scraping already-captured data
-- **Post-answer explanation extraction** — after submitting a blank answer to reveal the correct answer, the scraper switches to the explanation tab and captures both text and any inline diagrams
+- **Dynamically rendered content** - IXL loads questions via JavaScript without page refreshes; a DOM stabilization check polls until the new question is confirmed loaded before extraction starts
+- **Math-specific text formats** - fractions, vertical arithmetic, fill-in-the-blank inputs, and Unicode symbols (×, ÷, –) all needed special handling in the text extractor
+- **Visual diagrams alongside text** - 50+ distinct diagram types (number lines, pie charts, area models, Venn diagrams, cube trains, calendars, etc.) needed to be detected and screenshotted separately from the question text
+- **Pre-rendered phantom elements** - IXL renders upcoming questions below the viewport; the scraper had to identify and extract only the topmost (currently active) question
+- **Multiple question formats** - each extraction function (question text, options, correct answer) has 3–4 independent methods tried in order, so an unexpected format falls through to the next method rather than failing silently
+- **Session integrity** - navigating via breadcrumbs instead of direct URLs preserves the session state and avoids anti-bot redirects
+- **Concurrent uploads without blocking** - diagram screenshots are uploaded to Google Drive in background threads so scraping continues without waiting for each upload
+- **Resumable scraping** - if a run is interrupted, Mode 2 lets you resume from any specific skill URL without re-scraping already-captured data
+- **Post-answer explanation extraction** - after submitting a blank answer to reveal the correct answer, the scraper switches to the explanation tab and captures both text and any inline diagrams
 
 ---
 
@@ -64,24 +64,24 @@ Structured dataset for educational research
 | Metric | Count |
 |---|---|
 | Grades covered | 1–5 |
-| Categories scraped | ___ |
-| Skills scraped | ___ |
-| Questions collected | ___ |
-| Diagram screenshots generated | ___ |
-| Explanation files generated | ___ |
+| Categories scraped | 200+ |
+| Skills scraped | 2000+ |
+| Questions collected | 6000+ |
+| Diagram screenshots generated | 10000+ |
+| Explanation files generated | 6000+ |
 
 ---
 
 ## Features
 
-- **Playwright-Based Website Interaction** — runs a visible Chromium browser, navigates by clicking UI elements and breadcrumbs, uses a real user-agent string
-- **Custom Text Extraction Logic** — a custom JavaScript DOM walker handles fractions (`.vFrac`, `.old-fraction-in-text`), vertical arithmetic, fill-in-the-blank inputs, and Unicode math symbols
-- **Diagram Detection and Screenshot Capture** — detects and screenshots 50+ diagram types: number lines, fraction bars, pie charts, ten frames, area models, cube trains, Venn diagrams, coordinate planes, calendars, and more
-- **Multiple Extraction Methods** — each of question text, options, and correct answer has 3–4 independent extraction strategies tried in sequence
-- **Background Uploads to Google Drive** — screenshots are uploaded in background threads (5-worker pool) without pausing question extraction
-- **Resume Mode** — supports resuming a partial scrape from any skill URL without re-scraping already-captured data
-- **Explanation Extraction** — captures REMEMBER and SOLVE tabs from post-answer explanations, with inline `[image: url]` references where diagrams appear in the explanation
-- **Excel with Hyperlinks** — output workbook has clickable Google Drive folder links in the diagram columns
+- **Playwright-Based Website Interaction** - runs a visible Chromium browser, navigates by clicking UI elements and breadcrumbs, uses a real user-agent string
+- **Custom Text Extraction Logic** - a custom JavaScript DOM walker handles fractions (`.vFrac`, `.old-fraction-in-text`), vertical arithmetic, fill-in-the-blank inputs, and Unicode math symbols
+- **Diagram Detection and Screenshot Capture** - detects and screenshots 50+ diagram types: number lines, fraction bars, pie charts, ten frames, area models, cube trains, Venn diagrams, coordinate planes, calendars, and more
+- **Multiple Extraction Methods** - each of question text, options, and correct answer has 3–4 independent extraction strategies tried in sequence
+- **Background Uploads to Google Drive** - screenshots are uploaded in background threads (5-worker pool) without pausing question extraction
+- **Resume Mode** - supports resuming a partial scrape from any skill URL without re-scraping already-captured data
+- **Explanation Extraction** - captures REMEMBER and SOLVE tabs from post-answer explanations, with inline `[image: url]` references where diagrams appear in the explanation
+- **Excel with Hyperlinks** - output workbook has clickable Google Drive folder links in the diagram columns
 
 ---
 
@@ -186,7 +186,7 @@ EXPL_IMG_DRIVE_FOLDER_ID/
 - Python 3.8+
 - A valid IXL account (email + password)
 - A Google Cloud project with **Drive API** enabled and a downloaded `client_secret.json` (OAuth2 Desktop credentials)
-- Three Google Drive folders created in advance (for diagrams, explanation text, and explanation images) — copy their folder IDs
+- Three Google Drive folders created in advance (for diagrams, explanation text, and explanation images) - copy their folder IDs
 
 ---
 
@@ -244,8 +244,8 @@ On first run, a browser window will open to complete Google OAuth2 authorization
 **Select a mode when prompted:**
 
 ```
-[1] Full scrape — start from the beginning of the grade
-[2] Resume     — skip to START_URL and continue from there
+[1] Full scrape - start from the beginning of the grade
+[2] Resume     - skip to START_URL and continue from there
 ```
 
 The scraper runs in a visible Chromium window. Do not close the browser while it is running. Progress is printed to the terminal as each skill completes.
@@ -301,7 +301,7 @@ IXL-Emulate-Engine/
 
 ## Research Context
 
-This project was completed as part of a **Summer Research Internship at IIT Madras**. The dataset collected by this scraper was intended to support later experiments involving teacher-style spoken narration of mathematics questions — where each question would be converted into natural speech and used to train or evaluate a Text-to-Speech model.
+This project was completed as part of a **Summer Research Internship at IIT Madras**. The dataset collected by this scraper was intended to support later experiments involving teacher-style spoken narration of mathematics questions - where each question would be converted into natural speech and used to train or evaluate a Text-to-Speech model.
 
 The scraper covers the full IXL Grades 1–5 Math curriculum across all categories and skills, collecting 3 question samples per skill.
 
