@@ -6,7 +6,7 @@ import shutil
 import os
 import time
 
-client = genai.Client(api_key="AQ.Ab8RN6LNcBLoq5wZRZvbALNyfOAIzPrqce0uYkvzcthljDuokw")
+client = genai.Client(api_key="YOUR API KEY")
 
 generation_config = types.GenerateContentConfig(
     temperature=0.2,
