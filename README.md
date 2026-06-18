@@ -2,113 +2,142 @@
 
 > **IIT Madras Summer Research Internship Project**
 >
-> A resilient browser automation engine that systematically extracts Grade 5 mathematics curriculum content from IXL.com — capturing question text, answer options, visual diagrams, and step-by-step explanations into a structured dataset for downstream AI and TTS model training.
+> A Playwright-based scraper that extracts math questions, answer choices, diagrams, correct answers, and explanations from IXL. Used to collect curriculum data across Grades 1–5 and stores the results in Excel and Google Drive for educational research.
 
 ---
 
 ## Overview
 
-This project was developed during a summer research internship at **IIT Madras**. The goal: build a structured, AI-consumable dataset of math questions that can be transformed into natural-language teacher narrations to train **Text-to-Speech (TTS) models** — enabling a system that dictates math problems exactly as a teacher would to students in a classroom.
+This project was built during a summer research internship at **IIT Madras**. The objective was to collect a structured dataset of math questions from IXL's Grades 1–5 curriculum — including question text, answer options, correct answers, visual diagrams, and step-by-step explanations — to support later research on teacher-style spoken narration of mathematics.
 
-The scraper navigates every skill under the IXL Grade 5 Math curriculum, extracts 3 questions per skill, and produces:
+IXL is a dynamically rendered SPA that actively resists automated access. The main technical challenge was extracting content that varies significantly in format — some questions are plain text, some involve fractions or vertical arithmetic, and many include visual diagrams (number lines, fraction bars, pie charts, coordinate planes, etc.) that cannot be captured through text extraction alone.
 
-- Structured question data (text + options + correct answers) in an **Excel workbook**
-- Visual diagrams (number lines, fraction bars, pie charts, coordinate planes, etc.) as **PNG screenshots**
-- Step-by-step **explanation text** files
-- All assets synced to **Google Drive**
+The scraper handles all of this in a single file and saves results to:
 
----
+- An **Excel workbook** with one row per question (text, options, correct answer, Drive links)
+- **PNG screenshots** of diagrams, uploaded to **Google Drive**
+- **Explanation text files** (.txt) for each question's REMEMBER and SOLVE walkthrough tabs
 
-## Downstream Pipeline
-
-```
-IXL Platform
-     │
-     ▼
-IXL Emulate Engine  ──────────────────────────────────────────────────
-     │                                                                │
-     ▼                                                                ▼
-Excel Database                                            Google Drive
-(question text,                                     (diagram PNGs + explanation
- options, answers)                                   text files per question)
-     │
-     ▼
-Prompt Engineering Layer
-(convert structured Q&A into natural teacher-speech prompts)
-     │
-     ▼
-TTS Model Training
-(train model to dictate math problems as a teacher would to students)
-```
+The collected dataset was intended to support later work on converting math questions into teacher-style narrations for Text-to-Speech model training.
 
 ---
 
-## Key Features
+## Output
 
-- **Anti-Bot Human Emulation** — runs a visible Chromium browser, navigates via UI clicks and breadcrumbs, uses real user-agent strings; never touches the API
-- **JavaScript DOM Walker** — custom JS text extractor handles fractions (`.vFrac`, `.old-fraction-in-text`), vertical arithmetic, fill-in-the-blank inputs, and Unicode math symbols
-- **Multi-Type Diagram Capture** — detects and screenshots 50+ diagram signal types: number lines, fraction bars, pie charts, ten frames, area models, cube trains, Venn diagrams, coordinate planes, calendars, and more
-- **Four-Fallback Extraction** — each of question text, options, and correct answer has 3–4 independent extraction strategies; the pipeline degrades gracefully instead of crashing
-- **Async Drive Uploads** — diagram screenshots are uploaded in background threads (5-worker pool) without blocking question progression
+```
+IXL.com
+    │
+    ▼
+scraper.py
+    │
+    ├──────────────────────┬─────────────────────────┐
+    ▼                      ▼                         ▼
+Excel Workbook       Diagram PNGs             Explanation Text
+(questions, options, (number lines,           (.txt files with
+ correct answers)     pie charts, etc.)        REMEMBER + SOLVE
+                      → Google Drive)          → Google Drive)
+    │
+    ▼
+Structured dataset for educational research
+```
+
+---
+
+## Challenges Solved
+
+- **Dynamically rendered content** — IXL loads questions via JavaScript without page refreshes; a DOM stabilization check polls until the new question is confirmed loaded before extraction starts
+- **Math-specific text formats** — fractions, vertical arithmetic, fill-in-the-blank inputs, and Unicode symbols (×, ÷, –) all needed special handling in the text extractor
+- **Visual diagrams alongside text** — 50+ distinct diagram types (number lines, pie charts, area models, Venn diagrams, cube trains, calendars, etc.) needed to be detected and screenshotted separately from the question text
+- **Pre-rendered phantom elements** — IXL renders upcoming questions below the viewport; the scraper had to identify and extract only the topmost (currently active) question
+- **Multiple question formats** — each extraction function (question text, options, correct answer) has 3–4 independent methods tried in order, so an unexpected format falls through to the next method rather than failing silently
+- **Session integrity** — navigating via breadcrumbs instead of direct URLs preserves the session state and avoids anti-bot redirects
+- **Concurrent uploads without blocking** — diagram screenshots are uploaded to Google Drive in background threads so scraping continues without waiting for each upload
+- **Resumable scraping** — if a run is interrupted, Mode 2 lets you resume from any specific skill URL without re-scraping already-captured data
+- **Post-answer explanation extraction** — after submitting a blank answer to reveal the correct answer, the scraper switches to the explanation tab and captures both text and any inline diagrams
+
+---
+
+## Dataset Collected
+
+<!-- Fill in actual numbers from your completed scrape run -->
+
+| Metric | Count |
+|---|---|
+| Grades covered | 1–5 |
+| Categories scraped | ___ |
+| Skills scraped | ___ |
+| Questions collected | ___ |
+| Diagram screenshots generated | ___ |
+| Explanation files generated | ___ |
+
+---
+
+## Features
+
+- **Playwright-Based Website Interaction** — runs a visible Chromium browser, navigates by clicking UI elements and breadcrumbs, uses a real user-agent string
+- **Custom Text Extraction Logic** — a custom JavaScript DOM walker handles fractions (`.vFrac`, `.old-fraction-in-text`), vertical arithmetic, fill-in-the-blank inputs, and Unicode math symbols
+- **Diagram Detection and Screenshot Capture** — detects and screenshots 50+ diagram types: number lines, fraction bars, pie charts, ten frames, area models, cube trains, Venn diagrams, coordinate planes, calendars, and more
+- **Multiple Extraction Methods** — each of question text, options, and correct answer has 3–4 independent extraction strategies tried in sequence
+- **Background Uploads to Google Drive** — screenshots are uploaded in background threads (5-worker pool) without pausing question extraction
 - **Resume Mode** — supports resuming a partial scrape from any skill URL without re-scraping already-captured data
-- **Explanation Extraction** — captures REMEMBER and SOLVE tabs from post-answer explanations, with inline `[image: url]` references for embedded diagrams
-- **Excel with Hyperlinks** — output workbook has clickable Drive folder links for diagram columns
+- **Explanation Extraction** — captures REMEMBER and SOLVE tabs from post-answer explanations, with inline `[image: url]` references where diagrams appear in the explanation
+- **Excel with Hyperlinks** — output workbook has clickable Google Drive folder links in the diagram columns
 
 ---
 
-## Architecture
+## How It Works
 
 ```
 python scraper.py
   │
-  ├─ _choose_mode()              → Mode 1 (full) or Mode 2 (resume from START_URL)
-  ├─ _init_drive_service()       → Google OAuth2 → global Drive client
-  ├─ setup_dir()                 → create ixl_diagrams/ and ixl_explanations/
-  ├─ init_excel()                → create 11-column Excel workbook (idempotent)
-  ├─ _read_max_question_id()     → resume: find highest existing Ques ID
+  ├─ Choose mode: full scrape or resume from a specific skill URL
+  ├─ Google OAuth2 → connect to Drive
+  ├─ Create output directories and Excel file
   │
-  └─ Playwright Chromium session (headless=False)
-       ├─ Login to IXL
-       ├─ Navigate to Grade 5 Math index
+  └─ Chromium browser (visible window)
+       ├─ Log in to IXL
+       ├─ Navigate to the target grade's math index
        │
-       └─ for each category → for each skill:
-            └─ extract_and_advance()          ← core loop, 3 questions/skill
-                 ├─ Poll for DOM stabilization (new question loaded)
-                 ├─ extract_question_text()   → JS walker + normalize Unicode
-                 ├─ extract_options()         → 4-type option extraction
-                 ├─ extract_diagrams_screenshots()
-                 │    └─ _extract_from_scope()   → screenshot + Drive upload
-                 ├─ Submit blank answer to reveal correct answer
-                 ├─ extract_correct_answer()  → 4-strategy extraction
-                 ├─ _screenshot_answer_diagrams()
-                 ├─ scrape_explanation()      → .txt file + inline image refs
-                 ├─ append_to_excel()         → row with hyperlinked Drive URLs
-                 └─ Click "Got it" → advance to next question
+       └─ For each category → for each skill:
+            ├─ Click the skill link
+            └─ For each of 3 questions:
+                 ├─ Wait until the new question has loaded
+                 ├─ Extract question text
+                 ├─ Extract answer options
+                 ├─ Screenshot any diagrams in the question
+                 ├─ Submit a blank answer to reveal the correct answer
+                 ├─ Extract the correct answer
+                 ├─ Screenshot any diagrams in the answer
+                 ├─ Extract the explanation (REMEMBER + SOLVE tabs)
+                 └─ Append everything as a row in the Excel file
             │
-            └─ Breadcrumb click → back to Grade 5 index
+            └─ Click the breadcrumb to return to the grade index
 ```
 
-### Core Components
+### Key Functions
 
-| Component | File Location | Role |
-|---|---|---|
-| `run_scraper()` | line 1937 | Entry point — full orchestration |
-| `extract_and_advance()` | line 1827 | Per-skill question loop |
-| `_extract_from_scope()` | line 1383 | Core screenshot capture engine |
-| `extract_question_text()` | line 746 | Text extraction with 3 fallbacks |
-| `_MATH_WALKER_JS` | line 279 | JavaScript DOM tree walker for math text |
-| `_EXPL_WALKER_JS` | line 463 | DOM walker for explanation text (with `@@IMG:N@@` markers) |
-| `DIAGRAM_SIGNALS` | line 46 | 50+ CSS selectors that indicate a visual diagram |
+| Function | What it does |
+|---|---|
+| `run_scraper()` | Starts the scraper, handles login and the category/skill loops |
+| `extract_and_advance()` | Runs the extraction sequence for each question within a skill |
+| `extract_question_text()` | Extracts the question string; tries 3 methods in order |
+| `extract_options()` | Extracts answer choices; handles 4 different option formats |
+| `extract_correct_answer()` | Extracts the correct answer after submission; tries 4 methods |
+| `extract_diagrams_screenshots()` | Finds and screenshots diagrams in the question and option tiles |
+| `_extract_from_scope()` | Low-level screenshot function that deduplicates overlapping captures |
+| `scrape_explanation()` | Extracts the REMEMBER and SOLVE explanation tabs |
+| `append_to_excel()` | Writes one question's data as a row in the Excel workbook |
+| `_MATH_WALKER_JS` | JavaScript string that walks the DOM to extract math-formatted text |
 
 ---
 
 ## Output Schema
 
-### Excel Workbook (`ixl_grade5_questions[test].xlsx`)
+### Excel Workbook
 
 | Column | Header | Description |
 |---|---|---|
-| A | Ques ID | Globally unique, ever-increasing integer |
+| A | Ques ID | Unique question ID, increments across runs |
 | B | # | Skill serial number |
 | C | Category | Curriculum category name |
 | D | Skill Name | IXL skill name |
@@ -141,14 +170,14 @@ EXPL_IMG_DRIVE_FOLDER_ID/
 
 ## Technology Stack
 
-| Technology | Version | Purpose |
-|---|---|---|
-| Python | 3.x | Orchestration language |
-| [Playwright](https://playwright.dev/python/) | latest | Browser automation and DOM interaction |
-| [openpyxl](https://openpyxl.readthedocs.io/) | latest | Excel file creation and row appending |
-| Google Drive API v3 | — | Cloud storage for screenshots and text files |
-| google-auth-oauthlib | latest | OAuth2 desktop flow for Drive access |
-| concurrent.futures | stdlib | Thread pool for async Drive uploads |
+| Technology | Purpose |
+|---|---|
+| Python 3.x | Main language |
+| [Playwright](https://playwright.dev/python/) | Browser automation and DOM interaction |
+| [openpyxl](https://openpyxl.readthedocs.io/) | Excel file creation and row appending |
+| Google Drive API v3 | Cloud storage for screenshots and explanation files |
+| google-auth-oauthlib | OAuth2 desktop flow for Drive access |
+| concurrent.futures (stdlib) | Background thread pool for Drive uploads |
 
 ---
 
@@ -157,7 +186,7 @@ EXPL_IMG_DRIVE_FOLDER_ID/
 - Python 3.8+
 - A valid IXL account (email + password)
 - A Google Cloud project with **Drive API** enabled and a downloaded `client_secret.json` (OAuth2 Desktop credentials)
-- Three Google Drive folders created in advance (for diagrams, explanation text, and explanation images) — note their folder IDs
+- Three Google Drive folders created in advance (for diagrams, explanation text, and explanation images) — copy their folder IDs
 
 ---
 
@@ -195,10 +224,10 @@ EXPL_TXT_DRIVE_FOLDER_ID = "your_explanation_text_folder_id"
 EXPL_IMG_DRIVE_FOLDER_ID = "your_explanation_images_folder_id"
 
 # Scraping parameters
-QUESTIONS_PER_SKILL = 3          # questions to extract per skill
-TARGET_URL = "https://www.ixl.com/math/grade-5"  # change grade here
+QUESTIONS_PER_SKILL = 3
+TARGET_URL = "https://www.ixl.com/math/grade-5"  # change to target grade
 
-# For Mode 2 resume: set this to the skill URL you want to resume from
+# For Mode 2 resume: set this to the skill URL to resume from
 START_URL = "https://www.ixl.com/math/grade-5/some-skill-name"
 ```
 
@@ -215,11 +244,11 @@ On first run, a browser window will open to complete Google OAuth2 authorization
 **Select a mode when prompted:**
 
 ```
-[1] Full scrape — start from the beginning of Grade 5 Math
+[1] Full scrape — start from the beginning of the grade
 [2] Resume     — skip to START_URL and continue from there
 ```
 
-The scraper runs visibly in a Chromium window. Do not close the browser while it is running. Progress is printed to the terminal as each skill completes.
+The scraper runs in a visible Chromium window. Do not close the browser while it is running. Progress is printed to the terminal as each skill completes.
 
 ---
 
@@ -227,10 +256,10 @@ The scraper runs visibly in a Chromium window. Do not close the browser while it
 
 ```
 IXL-Emulate-Engine/
-├── scraper.py                      # Entire codebase (2078 lines, single file)
+├── scraper.py                      # Main scraping logic
 ├── client_secret.json              # Google OAuth2 credentials (not committed)
 ├── token.json                      # Cached OAuth token (auto-generated)
-├── ixl_grade5_questions[test].xlsx # Output Excel database (auto-generated)
+├── ixl_grade5_questions[test].xlsx # Output Excel file (auto-generated)
 ├── ixl_diagrams/                   # Local PNG screenshot cache
 │   └── {skill}_q{n}_{type}_{ts}.png
 ├── ixl_explanations/               # Local explanation .txt cache
@@ -247,12 +276,12 @@ IXL-Emulate-Engine/
 
 | Goal | What to Change |
 |---|---|
-| **Different grade** | `TARGET_URL`, `EXCEL_FILENAME`, `ws.title` in `init_excel()` |
-| **More questions per skill** | `QUESTIONS_PER_SKILL` constant (line 25) |
-| **New diagram type** | Add CSS selector to `DIAGRAM_SIGNALS` (line 46) and `L1_INTEGRATED`/`L1_MULTI` in `_extract_from_scope()` (line 1527/1570); add class to `_DIAGRAM_CLASSES` in both JS walkers |
-| **New option type** | Add fallback block in `extract_options()` (line 827) |
+| **Different grade** | `TARGET_URL`, `EXCEL_FILENAME`, sheet title in `init_excel()` |
+| **More questions per skill** | `QUESTIONS_PER_SKILL` constant |
+| **New diagram type** | Add CSS selector to `DIAGRAM_SIGNALS` and to `_extract_from_scope()`; add class name to `_DIAGRAM_CLASSES` in both JS walker strings |
+| **New option format** | Add a new fallback block in `extract_options()` |
 | **Different Drive folders** | Update the three `*_DRIVE_FOLDER_ID` constants |
-| **Resume from specific skill** | Set `START_URL` (line 37) and run Mode 2 |
+| **Resume from specific skill** | Set `START_URL` and run Mode 2 |
 
 ---
 
@@ -260,30 +289,26 @@ IXL-Emulate-Engine/
 
 | Symptom | Likely Cause | Fix |
 |---|---|---|
-| Empty question text | New diagram class absorbing text node | Check `_DIAGRAM_CLASSES` in `_MATH_WALKER_JS` (line 281) |
-| Missing diagram screenshots | New diagram type not in signal list | Add CSS selector to `DIAGRAM_SIGNALS` and `L1_INTEGRATED` |
-| Duplicate screenshots | Overlap threshold too low | Adjust threshold in `_boxes_overlap()` (line 1095) |
-| `PermissionError` on Excel | File open in Excel | Close the Excel file; the script will retry automatically |
+| Empty question text | A new diagram class is absorbing the text node | Check `_DIAGRAM_CLASSES` inside `_MATH_WALKER_JS` |
+| Missing diagram screenshots | New diagram type not in the signal list | Add its CSS selector to `DIAGRAM_SIGNALS` and `_extract_from_scope()` |
+| Duplicate screenshots | Overlap threshold is too low | Adjust the threshold in `_boxes_overlap()` |
+| `PermissionError` on Excel | File is open in Excel | Close the Excel file; the script will retry automatically |
 | Drive auth failure | `token.json` expired or missing | Delete `token.json` and re-run to re-authorize |
-| Session killed mid-scrape | IXL anti-bot detection triggered | Increase `page.wait_for_timeout` delays in `extract_and_advance()` |
-| Wrong question extracted | Active question detection failing | Check `_get_active_question()` Y-coordinate sort (line 724) |
+| Session killed mid-scrape | IXL detected automated access | Increase the `page.wait_for_timeout` delays in `extract_and_advance()` |
+| Wrong question extracted | Active question detection failing | Check the Y-coordinate sort logic in `_get_active_question()` |
 
 ---
 
 ## Research Context
 
-This project was completed as part of a **Summer Research Internship at IIT Madras**. The dataset produced by this scraper serves as the raw input for a downstream pipeline that:
+This project was completed as part of a **Summer Research Internship at IIT Madras**. The dataset collected by this scraper was intended to support later experiments involving teacher-style spoken narration of mathematics questions — where each question would be converted into natural speech and used to train or evaluate a Text-to-Speech model.
 
-1. Processes structured Q&A data from the Excel output
-2. Converts each question into natural-language teacher narrations (prompt engineering)
-3. Feeds those narrations into a **TTS model training pipeline** — the goal being a system that speaks math problems and explanations exactly as a teacher would dictate them to students
-
-The scraped content covers the full Grade 5 IXL Math curriculum across all categories and skills, with 3 question samples per skill.
+The scraper covers the full IXL Grades 1–5 Math curriculum across all categories and skills, collecting 3 question samples per skill.
 
 ---
 
 ## Acknowledgements
 
 - Developed during Summer Research Internship at **IIT Madras**
-- Built on top of [Microsoft Playwright](https://playwright.dev/python/) for browser automation
-- Data sourced from [IXL Learning](https://www.ixl.com) (Grade 1-5 Math curriculum)
+- Built with [Microsoft Playwright](https://playwright.dev/python/) for browser automation
+- Data sourced from [IXL Learning](https://www.ixl.com) (Grades 1–5 Math curriculum)
