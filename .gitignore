@@ -11,3 +11,8 @@ docs
 *.env
 token.json
 client_secret.json
+ixl_grade1_questions_updated.csv
+ixl_grade2_questions_updated.csv
+ixl_grade3_questions_updated.csv
+ixl_grade4_questions_updated.csv
+ixl_grade5_questions_updated.csv
