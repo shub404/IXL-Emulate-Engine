@@ -59,7 +59,6 @@ Structured dataset for educational research
 
 ## Dataset Collected
 
-<!-- Fill in actual numbers from your completed scrape run -->
 
 | Metric | Count |
 |---|---|
