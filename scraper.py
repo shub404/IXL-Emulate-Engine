@@ -14,12 +14,12 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-TARGET_URL = "https://www.ixl.com/math/grade-5"
+TARGET_URL = "https://www.ixl.com/math/grade-4"
 LOGIN_URL = "https://in.ixl.com/signin"
 EMAIL = "parkerhouston411@kacad"
 PASSWORD = "81party"
 QUESTIONS_PER_SKILL = 3
-EXCEL_FILENAME = "ixl_grade5_questions[test].xlsx"
+EXCEL_FILENAME = "ixl_grade4_questions[test].xlsx"
 IMAGE_DIR = "ixl_diagrams"
 DRIVE_FOLDER_ID = "1ki6EL5fT0kTzEaSAUXMsn6bSCnXSH4do"
 EXPL_DIR = "ixl_explanations"
@@ -29,7 +29,7 @@ SCOPES = ['https://www.googleapis.com/auth/drive']
 CLIENT_SECRET_FILE = "client_secret.json"
 TOKEN_FILE = "token.json"
 
-START_URL = "https://www.ixl.com/math/grade-5/describe-the-coordinate-plane"
+START_URL = "https://www.ixl.com/math/grade-4/multiply-fractions-and-mixed-numbers-by-whole-numbers-in-recipes"
 THIN = Side(style="thin", color="D9D9D9")
 BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
@@ -87,7 +87,8 @@ DIAGRAM_SIGNALS = [
     ".line-plot-container",
     ".stem-and-leaf-plot",
     ".canvas-container-div",
-    ".paystub-table"
+    ".paystub-table",
+    ".QMRecipes"
 ]
 
 Q_SCOPE_PARTS = [
@@ -284,7 +285,7 @@ _MATH_WALKER_JS = """
             } else if (child.nodeType === Node.ELEMENT_NODE) {
                 if (child.getAttribute('aria-hidden') === 'true') continue;
                 const tag = child.tagName.toLowerCase();
-                if (tag === 'button') continue;
+                if (tag === 'button' || tag === 'style' || tag === 'script' || tag === 'desc' || tag === 'defs') continue;
                 // --- Math-expression checks FIRST (before diagram-class skip) ---
                 if (tag === 'input' && child.classList.contains('fillIn')) {
                     out += '_';
@@ -550,7 +551,7 @@ _EXPL_WALKER_JS = """
             } else if (child.nodeType === Node.ELEMENT_NODE) {
                 if (child.getAttribute('aria-hidden') === 'true') continue;
                 const tag = child.tagName.toLowerCase();
-                if (tag === 'button') continue;
+                if (tag === 'button' || tag === 'style' || tag === 'script' || tag === 'desc' || tag === 'defs') continue;
                 // Screen-reader-only labels ("Option, ") are noise in explanations
                 if (child.classList && child.classList.contains('sr-only')) continue;
                 // Skip duplicate step label: .cell.explanation direct child of .row (not .entireRight)
