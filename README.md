@@ -2,13 +2,13 @@
 
 > **IIT Madras Summer Research Internship Project**
 >
-> A Playwright-based scraper that extracts math questions, answer choices, diagrams, correct answers, and explanations from IXL. Used to collect curriculum data across Grades 1–5 and stores the results in Excel and Google Drive for educational research.
+> A Playwright-based scraper that extracts math questions, answer choices, diagrams, correct answers, and explanations from IXL. Used to collect curriculum data across Grades 1–8 and stores the results in Excel and Google Drive for educational research.
 
 ---
 
 ## Overview
 
-This project was built during a summer research internship at **IIT Madras**. The objective was to collect a structured dataset of math questions from IXL's Grades 1–5 curriculum - including question text, answer options, correct answers, visual diagrams, and step-by-step explanations - to support later research on teacher-style spoken narration of mathematics.
+This project was built during a summer research internship at **IIT Madras**. The objective was to collect a structured dataset of math questions from IXL's Grades 1–8 curriculum - including question text, answer options, correct answers, visual diagrams, and step-by-step explanations - to support later research on teacher-style spoken narration of mathematics.
 
 IXL is a dynamically rendered SPA that actively resists automated access. The main technical challenge was extracting content that varies significantly in format - some questions are plain text, some involve fractions or vertical arithmetic, and many include visual diagrams (number lines, fraction bars, pie charts, coordinate planes, etc.) that cannot be captured through text extraction alone.
 
@@ -62,7 +62,7 @@ Structured dataset for educational research
 
 | Metric | Count |
 |---|---|
-| Grades covered | 1–5 |
+| Grades covered | 1–8 |
 | Categories scraped | 200+ |
 | Skills scraped | 2000+ |
 | Questions collected | 6000+ |
@@ -302,7 +302,7 @@ IXL-Emulate-Engine/
 
 This project was completed as part of a **Summer Research Internship at IIT Madras**. The dataset collected by this scraper was intended to support later experiments involving teacher-style spoken narration of mathematics questions - where each question would be converted into natural speech and used to train or evaluate a Text-to-Speech model.
 
-The scraper covers the full IXL Grades 1–5 Math curriculum across all categories and skills, collecting 3 question samples per skill.
+The scraper covers the full IXL Grades 1–8 Math curriculum across all categories and skills, collecting 3 question samples per skill.
 
 ---
 
@@ -310,4 +310,4 @@ The scraper covers the full IXL Grades 1–5 Math curriculum across all categori
 
 - Developed during Summer Research Internship at **IIT Madras**
 - Built with [Microsoft Playwright](https://playwright.dev/python/) for browser automation
-- Data sourced from [IXL Learning](https://www.ixl.com) (Grades 1–5 Math curriculum)
+- Data sourced from [IXL Learning](https://www.ixl.com) (Grades 1–8 Math curriculum)
